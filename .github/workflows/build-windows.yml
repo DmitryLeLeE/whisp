@@ -1,4 +1,4 @@
-name: Build WhisperSRT for Windows
+name: Build WhisperSRT for Windows (DEBUG)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Windows CPU EXE
+    name: Build Windows CPU EXE with console diagnostics
     runs-on: windows-latest
     timeout-minutes: 120
 
@@ -53,7 +53,7 @@ jobs:
             --noconfirm `
             --clean `
             --onefile `
-            --windowed `
+            --console `
             --name WhisperSRT `
             --collect-all torch `
             --collect-all whisper `
@@ -70,7 +70,7 @@ jobs:
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v7
         with:
-          name: WhisperSRT-Windows-CPU
+          name: WhisperSRT-Windows-CPU-Debug
           path: dist/WhisperSRT.exe
           if-no-files-found: error
           retention-days: 7
