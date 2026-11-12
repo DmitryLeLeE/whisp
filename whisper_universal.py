@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Universal batch transcription to SRT using OpenAI Whisper and FFmpeg.
-
-Examples:
-  python whisper_universal.py "D:/Videos/episode.ts"
-  python whisper_universal.py "D:/Videos" --recursive --language ru --model small
-  python whisper_universal.py "D:/Videos/episode.ts" --audio-stream 2
-  python whisper_universal.py "D:/Videos/episode.ts" --list-streams
-  python whisper_universal.py "D:/Videos" --output-dir "D:/Subtitles" --device cpu
-"""
-
+"""Universal batch transcription to SRT using faster-whisper and FFmpeg."""
 from __future__ import annotations
 
 import argparse
@@ -21,24 +12,20 @@ from pathlib import Path
 from typing import Any
 
 import ffmpeg
-import torch
-import whisper
-
+from faster_whisper import WhisperModel
 
 LOG = logging.getLogger("whisper_universal")
 
 SUPPORTED_EXTENSIONS = {
-    # Video containers
     ".3g2", ".3gp", ".asf", ".avi", ".flv", ".m2ts", ".m4v", ".mkv",
     ".mov", ".mp4", ".mpeg", ".mpg", ".mts", ".ogv", ".ts", ".vob",
     ".webm", ".wmv",
-    # Audio containers/formats
     ".aac", ".aiff", ".alac", ".amr", ".flac", ".m4a", ".m4b", ".mp3",
     ".ogg", ".opus", ".wav", ".wma",
 }
 
 MODEL_CHOICES = (
-    "tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "turbo"
+    "tiny", "base", "small", "medium", "large-v3", "turbo"
 )
 
 
@@ -46,58 +33,37 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Распознаёт речь в аудио/видео и сохраняет субтитры SRT."
     )
-    parser.add_argument(
-        "input", type=Path,
-        help="Путь к медиафайлу или папке с файлами.",
-    )
-    parser.add_argument(
-        "-o", "--output-dir", type=Path, default=None,
-        help="Папка для SRT. Если не указана, субтитры сохраняются рядом с исходниками.",
-    )
-    parser.add_argument(
-        "-r", "--recursive", action="store_true",
-        help="Искать медиафайлы в подпапках (для входной папки).",
-    )
-    parser.add_argument(
-        "-m", "--model", choices=MODEL_CHOICES, default="small",
-        help="Модель Whisper (по умолчанию: small).",
-    )
-    parser.add_argument(
-        "-l", "--language", default="auto",
-        help="Язык речи: ru, en, de и т. п.; auto включает автоопределение (по умолчанию).",
-    )
-    parser.add_argument(
-        "--task", choices=("transcribe", "translate"), default="transcribe",
-        help="transcribe = текст на исходном языке; translate = перевод на английский.",
-    )
-    parser.add_argument(
-        "--device", choices=("auto", "cpu", "cuda"), default="auto",
-        help="Вычислительное устройство. auto использует CUDA, если она доступна.",
-    )
-    parser.add_argument(
-        "--audio-stream", default="auto",
-        help="Глобальный индекс аудиопотока FFmpeg (например, 2) или auto (по умолчанию).",
-    )
-    parser.add_argument(
-        "--temp-dir", type=Path, default=None,
-        help="Папка для временных WAV-файлов. Полезно, если системный диск мал.",
-    )
-    parser.add_argument(
-        "--overwrite", action="store_true",
-        help="Перезаписывать уже существующие SRT-файлы.",
-    )
-    parser.add_argument(
-        "--quiet-progress", action="store_true",
-        help="Не выводить подробный прогресс распознавания Whisper.",
-    )
-    parser.add_argument(
-        "--list-streams", action="store_true",
-        help="Показать потоки одного медиафайла и завершить работу.",
-    )
-    parser.add_argument(
-        "--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO",
-        help="Уровень сообщений журнала (по умолчанию: INFO).",
-    )
+    parser.add_argument("input", type=Path, help="Путь к медиафайлу или папке с файлами.")
+    parser.add_argument("-o", "--output-dir", type=Path, default=None,
+                        help="Папка для SRT. Если не указана, субтитры сохраняются рядом с исходниками.")
+    parser.add_argument("-r", "--recursive", action="store_true",
+                        help="Искать медиафайлы в подпапках (для входной папки).")
+    parser.add_argument("-m", "--model", choices=MODEL_CHOICES, default="small",
+                        help="Модель Whisper (по умолчанию: small).")
+    parser.add_argument("-l", "--language", default="auto",
+                        help="Язык речи: ru, en, de и т. п.; auto включает автоопределение.")
+    parser.add_argument("--task", choices=("transcribe", "translate"), default="transcribe",
+                        help="transcribe = текст на исходном языке; translate = перевод на английский.")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
+                        help="Вычислительное устройство. auto использует CUDA, если она доступна.")
+    parser.add_argument("--audio-stream", default="auto",
+                        help="Глобальный индекс аудиопотока FFmpeg (например, 2) или auto.")
+    parser.add_argument("--temp-dir", type=Path, default=None,
+                        help="Папка для временных WAV-файлов.")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Перезаписывать уже существующие SRT-файлы.")
+    parser.add_argument("--beam-size", type=int, default=5,
+                        help="Ширина beam search (по умолчанию 5). Меньше = быстрее.")
+    parser.add_argument("--vad-filter", action="store_true", default=True,
+                        help="Включить VAD-фильтр (пропуск тишины). Включён по умолчанию.")
+    parser.add_argument("--no-vad", action="store_false", dest="vad_filter",
+                        help="Отключить VAD-фильтр.")
+    parser.add_argument("--quiet-progress", action="store_true",
+                        help="Не выводить подробный прогресс.")
+    parser.add_argument("--list-streams", action="store_true",
+                        help="Показать потоки одного медиафайла и завершить работу.")
+    parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+                        default="INFO", help="Уровень сообщений журнала.")
     args = parser.parse_args()
 
     if args.audio_stream != "auto":
@@ -162,10 +128,8 @@ def print_streams(path: Path) -> bool:
         sample_rate = stream.get("sample_rate", "?")
         default = " [DEFAULT]" if disposition.get("default") == 1 else ""
         title_text = f", название: {title}" if title else ""
-        LOG.info(
-            "Аудиодорожка %d: индекс FFmpeg=%s, язык=%s, кодек=%s, каналов=%s, Hz=%s%s%s",
-            position, index, language, codec, channels, sample_rate, title_text, default,
-        )
+        LOG.info("Аудиодорожка %d: индекс FFmpeg=%s, язык=%s, кодек=%s, каналов=%s, Hz=%s%s%s",
+                 position, index, language, codec, channels, sample_rate, title_text, default)
     return True
 
 
@@ -183,7 +147,6 @@ def choose_audio_stream(audio_streams: list[dict[str, Any]], requested: str | in
             f"Доступные индексы аудиопотоков: {available}. Используйте --list-streams."
         )
 
-    # Prefer the stream marked as default by the container; otherwise use the first audio stream.
     defaults = [s for s in audio_streams if (s.get("disposition") or {}).get("default") == 1]
     return defaults[0] if defaults else audio_streams[0]
 
@@ -214,7 +177,6 @@ def extract_audio_track(video_path: Path, output_audio_path: Path, stream_index:
 
 
 def format_srt_time(seconds: float) -> str:
-    """Convert seconds to SRT timestamps without wrapping after 24 hours."""
     total_ms = max(0, round(float(seconds) * 1000))
     hours, remainder = divmod(total_ms, 3_600_000)
     minutes, remainder = divmod(remainder, 60_000)
@@ -222,15 +184,16 @@ def format_srt_time(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{whole_seconds:02},{milliseconds:03}"
 
 
-def write_srt(result: dict[str, Any], output_path: Path) -> None:
+def write_srt(result_segments: list[Any], output_path: Path) -> None:
+    """Записывает SRT из списка сегментов faster-whisper."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_output = output_path.with_suffix(output_path.suffix + ".tmp")
     try:
         with temporary_output.open("w", encoding="utf-8-sig", newline="\n") as srt_file:
-            for number, segment in enumerate(result.get("segments", []), start=1):
-                start_time = format_srt_time(segment.get("start", 0))
-                end_time = format_srt_time(segment.get("end", 0))
-                text = str(segment.get("text", "")).strip().replace("\r", " ")
+            for number, segment in enumerate(result_segments, start=1):
+                start_time = format_srt_time(segment.start)
+                end_time = format_srt_time(segment.end)
+                text = str(segment.text).strip().replace("\r", " ")
                 srt_file.write(f"{number}\n{start_time} --> {end_time}\n{text}\n\n")
         temporary_output.replace(output_path)
     finally:
@@ -240,34 +203,34 @@ def write_srt(result: dict[str, Any], output_path: Path) -> None:
 
 def resolve_device(requested: str) -> str:
     if requested == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    if requested == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("Выбран --device cuda, но PyTorch не обнаружил доступную CUDA-видеокарту.")
+        try:
+            import ctranslate2
+            return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        except Exception:
+            return "cpu"
     return requested
 
 
-def is_cuda_oom(exc: BaseException) -> bool:
-    message = str(exc).lower()
-    return "out of memory" in message or "cuda error: memory allocation" in message
+def get_compute_type(device: str) -> str:
+    """int8 для CPU, float16 для CUDA — оптимальный баланс скорости и качества."""
+    return "int8" if device == "cpu" else "float16"
 
 
 def transcribe_one(
     source: Path,
     output_path: Path,
-    model: Any,
+    model: WhisperModel,
     model_name: str,
     device: str,
     args: argparse.Namespace,
-) -> tuple[Any, str]:
+) -> tuple[WhisperModel, str]:
     _, audio_streams = get_audio_streams(source)
     selected_stream = choose_audio_stream(audio_streams, args.audio_stream)
     stream_index = int(selected_stream["index"])
     tags = selected_stream.get("tags") or {}
-    LOG.info(
-        "Источник: %s | аудиопоток %s | язык дорожки: %s | кодек: %s",
-        source.name, stream_index, tags.get("language", "не указан"),
-        selected_stream.get("codec_name", "неизвестно"),
-    )
+    LOG.info("Источник: %s | аудиопоток %s | язык дорожки: %s | кодек: %s",
+             source.name, stream_index, tags.get("language", "не указан"),
+             selected_stream.get("codec_name", "неизвестно"))
 
     if args.temp_dir:
         args.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -282,35 +245,18 @@ def transcribe_one(
         extract_audio_track(source, audio_path, stream_index)
         LOG.info("Начинаю распознавание: %s", source.name)
 
-        try:
-            result = model.transcribe(
-                str(audio_path),
-                language=language,
-                task=args.task,
-                verbose=not args.quiet_progress,
-                fp16=(device == "cuda"),
-            )
-        except Exception as exc:
-            if args.device != "auto" or device != "cuda" or not is_cuda_oom(exc):
-                raise
-            LOG.warning(
-                "Не хватило видеопамяти для модели %s. Переключаюсь на CPU и повторяю этот файл.",
-                model_name,
-            )
-            del model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            model = whisper.load_model(model_name, device="cpu")
-            device = "cpu"
-            result = model.transcribe(
-                str(audio_path),
-                language=language,
-                task=args.task,
-                verbose=not args.quiet_progress,
-                fp16=False,
-            )
+        segments_generator, info = model.transcribe(
+            str(audio_path),
+            language=language,
+            task=args.task,
+            beam_size=args.beam_size,
+            vad_filter=args.vad_filter,
+            vad_parameters=dict(min_silence_duration_ms=500) if args.vad_filter else None,
+        )
+        segments = list(segments_generator)  # материализуем генератор
+        LOG.info("Распознано сегментов: %d, язык: %s", len(segments), info.language)
 
-    write_srt(result, output_path)
+    write_srt(segments, output_path)
     LOG.info("SRT сохранён: %s", output_path)
     return model, device
 
@@ -366,16 +312,16 @@ def main() -> int:
     LOG.info("Найдено файлов: %d", len(files))
     try:
         device = resolve_device(args.device)
-        LOG.info("Загружаю модель Whisper '%s' на устройстве %s...", args.model, device)
-        try:
-            model = whisper.load_model(args.model, device=device)
-        except Exception as exc:
-            if args.device == "auto" and device == "cuda":
-                LOG.warning("Не удалось загрузить модель на CUDA (%s). Пробую CPU.", exc)
-                device = "cpu"
-                model = whisper.load_model(args.model, device=device)
-            else:
-                raise
+        compute_type = get_compute_type(device)
+        cpu_threads = os.cpu_count() or 4
+        LOG.info("Загружаю faster-whisper модель '%s' на устройстве %s (compute_type=%s, cpu_threads=%d)...",
+                 args.model, device, compute_type, cpu_threads)
+        model = WhisperModel(
+            args.model,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads,
+        )
         LOG.info("Модель загружена.")
     except Exception as exc:
         LOG.error("Не удалось загрузить модель: %s", exc, exc_info=args.log_level == "DEBUG")
@@ -404,10 +350,8 @@ def main() -> int:
             LOG.error("Не удалось обработать '%s': %s", source, exc, exc_info=args.log_level == "DEBUG")
             failed.append((source, str(exc)))
 
-    LOG.info(
-        "Готово. Успешно: %d | пропущено: %d | ошибок: %d",
-        success_count, skipped_count, len(failed),
-    )
+    LOG.info("Готово. Успешно: %d | пропущено: %d | ошибок: %d",
+             success_count, skipped_count, len(failed))
     if failed:
         LOG.error("Файлы с ошибками:")
         for path, error in failed:

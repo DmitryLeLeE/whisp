@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""A simple Windows GUI for creating SRT subtitles with OpenAI Whisper."""
+"""A simple Windows GUI for creating SRT subtitles with faster-whisper."""
 from __future__ import annotations
 
 import logging
@@ -13,10 +13,11 @@ from types import SimpleNamespace
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-# Add bundled FFmpeg binaries to PATH before importing ffmpeg-python/core.
+
 def resource_path(relative: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / relative
+
 
 _ffmpeg_dir = resource_path("ffmpeg_bin")
 if _ffmpeg_dir.is_dir():
@@ -52,7 +53,6 @@ class QueueLogHandler(logging.Handler):
 
 
 class QueueStream:
-    """Redirect console progress/output into the GUI without requiring a console."""
     encoding = "utf-8"
 
     def __init__(self, target_queue: queue.Queue):
@@ -63,7 +63,6 @@ class QueueStream:
         if not text:
             return 0
         self._buffer += str(text)
-        # tqdm typically refreshes with carriage returns rather than newlines.
         while "\n" in self._buffer or "\r" in self._buffer:
             positions = [p for p in (self._buffer.find("\n"), self._buffer.find("\r")) if p >= 0]
             index = min(positions)
@@ -232,7 +231,6 @@ class WhisperSRTApp:
         root_logger.setLevel(logging.INFO)
         root_logger.addHandler(QueueLogHandler(self.messages))
         logging.getLogger("whisper_universal").setLevel(logging.INFO)
-        # A windowed PyInstaller app has no console, so route stdout/stderr to the log window.
         sys.stdout = QueueStream(self.messages)  # type: ignore[assignment]
         sys.stderr = QueueStream(self.messages)  # type: ignore[assignment]
 
@@ -335,26 +333,16 @@ class WhisperSRTApp:
         model = None
         device = "cpu"
         try:
-            # Load heavy dependencies only after the window is visible.
-            import torch
-            import whisper
             import whisper_universal as core
+            from faster_whisper import WhisperModel
 
             self.messages.put(("status", f"Загрузка модели {model_name}…"))
             self.messages.put(("log", "Если модель используется впервые, она будет загружена из интернета и сохранена в кэше."))
             device = core.resolve_device(device_choice)
-            self.messages.put(("log", f"Устройство: {device}. Загружаю модель Whisper '{model_name}'…"))
-            try:
-                model = whisper.load_model(model_name, device=device)
-            except Exception as exc:
-                if device_choice == "auto" and device == "cuda":
-                    self.messages.put(("log", f"Не удалось загрузить модель на CUDA: {exc}. Пробую CPU."))
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    device = "cpu"
-                    model = whisper.load_model(model_name, device=device)
-                else:
-                    raise
+            compute_type = core.get_compute_type(device)
+            cpu_threads = os.cpu_count() or 4
+            self.messages.put(("log", f"Устройство: {device}, compute_type: {compute_type}. Загружаю модель '{model_name}'…"))
+            model = WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
             self.messages.put(("log", f"Модель '{model_name}' загружена."))
 
             args = SimpleNamespace(
@@ -362,6 +350,8 @@ class WhisperSRTApp:
                 temp_dir=None,
                 language=language,
                 task="transcribe",
+                beam_size=5,
+                vad_filter=True,
                 quiet_progress=True,
                 device=device_choice,
             )
@@ -376,7 +366,6 @@ class WhisperSRTApp:
                 else:
                     destination = output_dir / f"{source.stem}.whisper.srt"
                     if destination.exists() and not overwrite:
-                        # Avoid confusing a second file with the same base name for a completed result.
                         destination = output_dir / f"{source.parent.name}_{source.stem}.whisper.srt"
 
                 self.messages.put(("status", f"Обработка {number}/{total}: {source.name}"))
