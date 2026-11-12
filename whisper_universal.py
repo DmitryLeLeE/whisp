@@ -228,6 +228,49 @@ def get_compute_type(device: str) -> str:
         return "int8"
 
 
+CUDA_ERROR_MARKERS = ("cublas", "cudnn", "cufft", "curand", "nvrtc", "cuda")
+
+
+def _is_cuda_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in CUDA_ERROR_MARKERS)
+
+
+def _run_transcription(
+    model: WhisperModel,
+    audio_path: Path,
+    language: str | None,
+    beam_size: int,
+    args: argparse.Namespace,
+    progress_callback: Callable[[float, float], None] | None,
+) -> tuple[list[Any], float]:
+    segments_generator, info = model.transcribe(
+        str(audio_path),
+        language=language,
+        task=args.task,
+        beam_size=beam_size,
+        vad_filter=args.vad_filter,
+        vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=200) if args.vad_filter else None,
+        condition_on_previous_text=False,
+        temperature=[0.0, 0.2, 0.4],
+    )
+
+    total_duration = float(getattr(info, "duration", 0.0) or 0.0)
+    LOG.info("Длительность аудио: %.1f сек (определён язык: %s)", total_duration, info.language)
+
+    segments: list[Any] = []
+    last_percent = -1.0
+    for segment in segments_generator:
+        segments.append(segment)
+        if progress_callback is not None and total_duration > 0:
+            percent = (segment.end / total_duration) * 100.0
+            percent = max(0.0, min(100.0, percent))
+            if abs(percent - last_percent) >= 0.5:
+                progress_callback(segment.end, total_duration)
+                last_percent = percent
+    return segments, total_duration
+
+
 def transcribe_one(
     source: Path,
     output_path: Path,
@@ -261,30 +304,24 @@ def transcribe_one(
         # Для turbo модели beam=1 дает практически то же качество, но работает в 2x быстрее
         effective_beam = 1 if "turbo" in model_name.lower() else getattr(args, "beam_size", 5)
 
-        segments_generator, info = model.transcribe(
-            str(audio_path),
-            language=language,
-            task=args.task,
-            beam_size=effective_beam,
-            vad_filter=args.vad_filter,
-            vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=200) if args.vad_filter else None,
-            condition_on_previous_text=False,
-            temperature=[0.0, 0.2, 0.4],
-        )
-
-        total_duration = float(getattr(info, "duration", 0.0) or 0.0)
-        LOG.info("Длительность аудио: %.1f сек (определён язык: %s)", total_duration, info.language)
-
-        segments = []
-        last_percent = -1.0
-        for segment in segments_generator:
-            segments.append(segment)
-            if progress_callback is not None and total_duration > 0:
-                percent = (segment.end / total_duration) * 100.0
-                percent = max(0.0, min(100.0, percent))
-                if abs(percent - last_percent) >= 0.5:
-                    progress_callback(segment.end, total_duration)
-                    last_percent = percent
+        try:
+            segments, total_duration = _run_transcription(
+                model, audio_path, language, effective_beam, args, progress_callback)
+        except Exception as exc:
+            # Видеокарта есть, но не хватает библиотек CUDA (cuBLAS/cuDNN): переходим на CPU.
+            # Если пользователь явно выбрал cuda, ошибку не скрываем.
+            if device != "cuda" or getattr(args, "device", "auto") == "cuda" or not _is_cuda_error(exc):
+                raise
+            LOG.warning("Ошибка CUDA (%s). Переключаюсь на CPU и повторяю распознавание.", exc)
+            model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=min(8, os.cpu_count() or 4),
+            )
+            device = "cpu"
+            segments, total_duration = _run_transcription(
+                model, audio_path, language, effective_beam, args, progress_callback)
 
         LOG.info("Распознано сегментов: %d", len(segments))
 
