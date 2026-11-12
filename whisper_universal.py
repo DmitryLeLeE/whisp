@@ -9,7 +9,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import ffmpeg
 from faster_whisper import WhisperModel
@@ -24,9 +24,7 @@ SUPPORTED_EXTENSIONS = {
     ".ogg", ".opus", ".wav", ".wma",
 }
 
-MODEL_CHOICES = (
-    "tiny", "base", "small", "medium", "large-v3", "turbo"
-)
+MODEL_CHOICES = ("tiny", "base", "small", "medium", "large-v3", "turbo")
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true",
                         help="Перезаписывать уже существующие SRT-файлы.")
     parser.add_argument("--beam-size", type=int, default=5,
-                        help="Ширина beam search (по умолчанию 5). Меньше = быстрее.")
+                        help="Ширина beam search (по умолчанию 5). Для turbo автоматически используется 1.")
     parser.add_argument("--vad-filter", action="store_true", default=True,
                         help="Включить VAD-фильтр (пропуск тишины). Включён по умолчанию.")
     parser.add_argument("--no-vad", action="store_false", dest="vad_filter",
@@ -107,7 +105,7 @@ def get_audio_streams(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]
 
 def print_streams(path: Path) -> bool:
     try:
-        probe, audio_streams = get_audio_streams(path)
+        _, audio_streams = get_audio_streams(path)
     except Exception as exc:
         LOG.error("%s", exc)
         return False
@@ -166,6 +164,7 @@ def extract_audio_track(video_path: Path, output_audio_path: Path, stream_index:
                     "acodec": "pcm_s16le",
                     "f": "wav",
                     "loglevel": "error",
+                    "threads": "0",
                 },
             )
             .overwrite_output()
@@ -185,7 +184,6 @@ def format_srt_time(seconds: float) -> str:
 
 
 def write_srt(result_segments: list[Any], output_path: Path) -> None:
-    """Записывает SRT из списка сегментов faster-whisper."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_output = output_path.with_suffix(output_path.suffix + ".tmp")
     try:
@@ -212,8 +210,22 @@ def resolve_device(requested: str) -> str:
 
 
 def get_compute_type(device: str) -> str:
-    """int8 для CPU, float16 для CUDA — оптимальный баланс скорости и качества."""
-    return "int8" if device == "cpu" else "float16"
+    if device == "cpu":
+        return "int8"
+
+    try:
+        import ctranslate2
+        supported = ctranslate2.get_supported_compute_types("cuda")
+        LOG.info("Поддерживаемые compute_type на CUDA: %s", supported)
+        for candidate in ("float16", "int8_float16", "bfloat16", "float32"):
+            if candidate in supported:
+                LOG.info("Выбран compute_type: %s", candidate)
+                return candidate
+        LOG.warning("Ни один из предпочтительных типов не найден, использую float32.")
+        return "float32"
+    except Exception as exc:
+        LOG.warning("Не удалось получить список поддерживаемых compute_type (%s). Использую int8.", exc)
+        return "int8"
 
 
 def transcribe_one(
@@ -223,6 +235,7 @@ def transcribe_one(
     model_name: str,
     device: str,
     args: argparse.Namespace,
+    progress_callback: Callable[[float, float], None] | None = None,
 ) -> tuple[WhisperModel, str]:
     _, audio_streams = get_audio_streams(source)
     selected_stream = choose_audio_stream(audio_streams, args.audio_stream)
@@ -245,16 +258,38 @@ def transcribe_one(
         extract_audio_track(source, audio_path, stream_index)
         LOG.info("Начинаю распознавание: %s", source.name)
 
+        # Для turbo модели beam=1 дает практически то же качество, но работает в 2x быстрее
+        effective_beam = 1 if "turbo" in model_name.lower() else getattr(args, "beam_size", 5)
+
         segments_generator, info = model.transcribe(
             str(audio_path),
             language=language,
             task=args.task,
-            beam_size=args.beam_size,
+            beam_size=effective_beam,
             vad_filter=args.vad_filter,
-            vad_parameters=dict(min_silence_duration_ms=500) if args.vad_filter else None,
+            vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=200) if args.vad_filter else None,
+            condition_on_previous_text=False,
+            temperature=[0.0, 0.2, 0.4],
         )
-        segments = list(segments_generator)  # материализуем генератор
-        LOG.info("Распознано сегментов: %d, язык: %s", len(segments), info.language)
+
+        total_duration = float(getattr(info, "duration", 0.0) or 0.0)
+        LOG.info("Длительность аудио: %.1f сек (определён язык: %s)", total_duration, info.language)
+
+        segments = []
+        last_percent = -1.0
+        for segment in segments_generator:
+            segments.append(segment)
+            if progress_callback is not None and total_duration > 0:
+                percent = (segment.end / total_duration) * 100.0
+                percent = max(0.0, min(100.0, percent))
+                if abs(percent - last_percent) >= 0.5:
+                    progress_callback(segment.end, total_duration)
+                    last_percent = percent
+
+        LOG.info("Распознано сегментов: %d", len(segments))
+
+    if progress_callback is not None:
+        progress_callback(total_duration, total_duration)
 
     write_srt(segments, output_path)
     LOG.info("SRT сохранён: %s", output_path)
@@ -313,7 +348,7 @@ def main() -> int:
     try:
         device = resolve_device(args.device)
         compute_type = get_compute_type(device)
-        cpu_threads = os.cpu_count() or 4
+        cpu_threads = min(8, os.cpu_count() or 4)
         LOG.info("Загружаю faster-whisper модель '%s' на устройстве %s (compute_type=%s, cpu_threads=%d)...",
                  args.model, device, compute_type, cpu_threads)
         model = WhisperModel(

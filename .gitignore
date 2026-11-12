@@ -1,0 +1,31 @@
+# Виртуальное окружение
+venv/
+env/
+.venv/
+
+# Сборка PyInstaller
+build/
+dist/
+*.spec
+
+# Бинарники FFmpeg (скачиваются отдельно)
+ffmpeg_bin/
+ffmpeg.zip
+ffmpeg_tmp/
+
+# Готовые архивы релиза
+*.zip
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Временные WAV и SRT
+whisper_transcribe_*/
+*.tmp
+*.whisper.srt
+
+# Редакторы
+.vscode/
+.idea/

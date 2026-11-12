@@ -7,6 +7,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
@@ -89,8 +90,8 @@ class WhisperSRTApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("900x690")
-        self.root.minsize(760, 580)
+        self.root.geometry("920x760")
+        self.root.minsize(760, 620)
 
         self.messages: queue.Queue = queue.Queue()
         self.selected_files: list[Path] = []
@@ -105,6 +106,7 @@ class WhisperSRTApp:
         self.output_dir_var = tk.StringVar(value="")
         self.overwrite_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Выберите один или несколько аудио-/видеофайлов.")
+        self.progress_percent_var = tk.StringVar(value="0%")
 
         self._build_ui()
         self._configure_logging()
@@ -118,8 +120,8 @@ class WhisperSRTApp:
         ttk.Label(outer, text="Whisper SRT", font=("Segoe UI", 17, "bold")).pack(anchor="w")
         ttk.Label(
             outer,
-            text="Создание субтитров SRT из аудио и видео. При первом запуске выбранная модель скачивается автоматически.",
-            wraplength=850,
+            text="Создание субтитров SRT из медиафайлов через faster-whisper. Первая загрузка модели сохраняется в кэш.",
+            wraplength=880,
         ).pack(anchor="w", pady=(2, 12))
 
         files_frame = ttk.LabelFrame(outer, text="1. Исходные файлы", padding=10)
@@ -130,7 +132,7 @@ class WhisperSRTApp:
         self.choose_button.pack(side="left")
         self.clear_button = ttk.Button(file_buttons, text="Очистить список", command=self._clear_files)
         self.clear_button.pack(side="left", padx=(8, 0))
-        self.files_label = ttk.Label(files_frame, text="Файлы не выбраны", wraplength=800)
+        self.files_label = ttk.Label(files_frame, text="Файлы не выбраны", wraplength=850)
         self.files_label.pack(anchor="w", pady=(8, 0))
 
         settings_frame = ttk.LabelFrame(outer, text="2. Параметры распознавания", padding=10)
@@ -161,7 +163,7 @@ class WhisperSRTApp:
         ttk.Label(settings_frame, text="Аудиопоток:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=5)
         self.stream_entry = ttk.Entry(settings_frame, textvariable=self.stream_var, width=18)
         self.stream_entry.grid(row=1, column=1, sticky="ew", padx=(0, 18), pady=5)
-        ttk.Label(settings_frame, text="auto или индекс FFmpeg, например 2").grid(
+        ttk.Label(settings_frame, text="auto или индекс потока (например, 1)").grid(
             row=1, column=2, columnspan=2, sticky="w", pady=5
         )
 
@@ -174,11 +176,11 @@ class WhisperSRTApp:
             width=18,
         )
         self.device_box.grid(row=2, column=1, sticky="ew", padx=(0, 18), pady=5)
-        ttk.Label(settings_frame, text="Авто использует CUDA, если она есть в сборке.").grid(
+        ttk.Label(settings_frame, text="Авто выбирает CUDA при наличии видеокарты NVIDIA.").grid(
             row=2, column=2, columnspan=2, sticky="w", pady=5
         )
 
-        output_frame = ttk.LabelFrame(outer, text="3. Куда сохранять SRT", padding=10)
+        output_frame = ttk.LabelFrame(outer, text="3. Сохранение результатов", padding=10)
         output_frame.pack(fill="x", pady=(0, 10))
         output_row = ttk.Frame(output_frame)
         output_row.pack(fill="x")
@@ -188,8 +190,8 @@ class WhisperSRTApp:
         self.output_button.pack(side="left", padx=(8, 0))
         ttk.Label(
             output_frame,
-            text="Если папка не указана, субтитры сохраняются рядом с исходным файлом.",
-            wraplength=830,
+            text="Если папка не указана, субтитры сохраняются рядом с исходными файлами.",
+            wraplength=850,
         ).pack(anchor="w", pady=(5, 0))
         self.overwrite_check = ttk.Checkbutton(
             output_frame,
@@ -211,6 +213,17 @@ class WhisperSRTApp:
         self.stop_button.pack(side="left", padx=(8, 0))
         ttk.Label(action_row, textvariable=self.status_var).pack(side="left", padx=(12, 0), fill="x", expand=True)
 
+        progress_row = ttk.Frame(outer)
+        progress_row.pack(fill="x", pady=(0, 10))
+        ttk.Label(progress_row, text="Прогресс:").pack(side="left", padx=(0, 6))
+        self.progress_bar = ttk.Progressbar(
+            progress_row, orient="horizontal", mode="determinate", maximum=100.0
+        )
+        self.progress_bar.pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            progress_row, textvariable=self.progress_percent_var, width=6, anchor="e"
+        ).pack(side="left", padx=(6, 0))
+
         log_frame = ttk.LabelFrame(outer, text="Журнал работы", padding=6)
         log_frame.pack(fill="both", expand=True)
         self.log_text = tk.Text(log_frame, height=12, wrap="word", state="disabled", font=("Consolas", 9))
@@ -219,20 +232,16 @@ class WhisperSRTApp:
         self.log_text.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        ttk.Label(
-            outer,
-            text="Примечание: для первой загрузки модели нужен интернет. Само распознавание после загрузки модели выполняется локально.",
-            wraplength=850,
-        ).pack(anchor="w", pady=(8, 0))
-
     def _configure_logging(self) -> None:
         root_logger = logging.getLogger()
         root_logger.handlers.clear()
         root_logger.setLevel(logging.INFO)
         root_logger.addHandler(QueueLogHandler(self.messages))
         logging.getLogger("whisper_universal").setLevel(logging.INFO)
-        sys.stdout = QueueStream(self.messages)  # type: ignore[assignment]
-        sys.stderr = QueueStream(self.messages)  # type: ignore[assignment]
+        # Перехватываем стандартный вывод для отображения в окне GUI
+        stream = QueueStream(self.messages)
+        sys.stdout = stream  # type: ignore[assignment]
+        sys.stderr = stream  # type: ignore[assignment]
 
     def _choose_files(self) -> None:
         chosen = filedialog.askopenfilenames(
@@ -266,6 +275,10 @@ class WhisperSRTApp:
         if chosen:
             self.output_dir_var.set(chosen)
 
+    def _reset_progress(self) -> None:
+        self.progress_bar.configure(value=0.0)
+        self.progress_percent_var.set("0%")
+
     def _start(self) -> None:
         if self.busy:
             return
@@ -287,7 +300,7 @@ class WhisperSRTApp:
                 if audio_stream < 0:
                     raise ValueError
             except ValueError:
-                messagebox.showerror(APP_TITLE, "Аудиопоток должен быть auto или неотрицательным индексом FFmpeg.")
+                messagebox.showerror(APP_TITLE, "Аудиопоток должен быть auto или целым индексом FFmpeg.")
                 return
 
         output_text = self.output_dir_var.get().strip()
@@ -304,6 +317,7 @@ class WhisperSRTApp:
         self._set_controls_enabled(False)
         self.stop_button.configure(state="normal")
         self.status_var.set("Подготовка…")
+        self._reset_progress()
 
         options = {
             "files": list(self.selected_files),
@@ -337,13 +351,15 @@ class WhisperSRTApp:
             from faster_whisper import WhisperModel
 
             self.messages.put(("status", f"Загрузка модели {model_name}…"))
-            self.messages.put(("log", "Если модель используется впервые, она будет загружена из интернета и сохранена в кэше."))
             device = core.resolve_device(device_choice)
             compute_type = core.get_compute_type(device)
-            cpu_threads = os.cpu_count() or 4
-            self.messages.put(("log", f"Устройство: {device}, compute_type: {compute_type}. Загружаю модель '{model_name}'…"))
+            # Ограничиваем потоки до 8 для предотвращения деградации OpenMP
+            cpu_threads = min(8, os.cpu_count() or 4)
+
+            self.messages.put(("log", f"Устройство: {device}, compute_type: {compute_type}, потоков CPU: {cpu_threads}."))
+            self.messages.put(("log", f"Загружаю модель '{model_name}'…"))
             model = WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
-            self.messages.put(("log", f"Модель '{model_name}' загружена."))
+            self.messages.put(("log", f"Модель '{model_name}' готова к работе."))
 
             args = SimpleNamespace(
                 audio_stream=audio_stream,
@@ -356,7 +372,20 @@ class WhisperSRTApp:
                 device=device_choice,
             )
 
-            total = len(files)
+            _last_update_time = [0.0]
+            _last_percent = [-1.0]
+
+            def _on_progress(current: float, total: float) -> None:
+                now = time.monotonic()
+                percent = (current / total) * 100.0 if total > 0 else 0.0
+                percent = max(0.0, min(100.0, percent))
+                if now - _last_update_time[0] < 0.25 and abs(percent - _last_percent[0]) < 0.5:
+                    return
+                _last_update_time[0] = now
+                _last_percent[0] = percent
+                self.messages.put(("progress", percent))
+
+            total_files = len(files)
             for number, source in enumerate(files, start=1):
                 if self.stop_after_current.is_set():
                     break
@@ -365,22 +394,25 @@ class WhisperSRTApp:
                     destination = source.with_name(f"{source.stem}.whisper.srt")
                 else:
                     destination = output_dir / f"{source.stem}.whisper.srt"
-                    if destination.exists() and not overwrite:
-                        destination = output_dir / f"{source.parent.name}_{source.stem}.whisper.srt"
 
-                self.messages.put(("status", f"Обработка {number}/{total}: {source.name}"))
-                self.messages.put(("log", f"[{number}/{total}] {source}"))
+                _last_percent[0] = -1.0
+                _last_update_time[0] = 0.0
+                self.messages.put(("progress", 0.0))
+                self.messages.put(("status", f"Обработка {number}/{total_files}: {source.name}"))
+                self.messages.put(("log", f"[{number}/{total_files}] {source}"))
 
                 if destination.exists() and not overwrite:
-                    self.messages.put(("log", f"Пропуск: результат уже существует: {destination}"))
+                    self.messages.put(("log", f"Пропуск: файл уже существует: {destination}"))
                     skipped += 1
                     continue
 
                 try:
                     model, device = core.transcribe_one(
-                        source, destination, model, model_name, device, args
+                        source, destination, model, model_name, device, args,
+                        progress_callback=_on_progress,
                     )
                     successes += 1
+                    self.messages.put(("progress", 100.0))
                 except Exception as exc:
                     failures.append((source, str(exc)))
                     self.messages.put(("log", f"ОШИБКА: {source.name}: {exc}"))
@@ -393,15 +425,15 @@ class WhisperSRTApp:
                 for source, error in failures:
                     self.messages.put(("log", f"  {source.name}: {error}"))
             if self.stop_after_current.is_set():
-                self.messages.put(("status", "Остановлено после текущего файла."))
+                self.messages.put(("status", "Остановлено пользователем."))
             elif failures:
-                self.messages.put(("status", "Завершено с ошибками. Подробности в журнале."))
+                self.messages.put(("status", "Завершено с ошибками. См. журнал."))
             else:
                 self.messages.put(("status", "Готово."))
         except Exception as exc:
             self.messages.put(("log", f"КРИТИЧЕСКАЯ ОШИБКА: {exc}"))
             self.messages.put(("log", traceback.format_exc()))
-            self.messages.put(("status", "Ошибка запуска. Подробности в журнале."))
+            self.messages.put(("status", "Ошибка при выполнении. См. журнал."))
         finally:
             self.messages.put(("finished", None))
 
@@ -436,6 +468,10 @@ class WhisperSRTApp:
                     self.log_text.configure(state="disabled")
                 elif kind == "status":
                     self.status_var.set(str(value))
+                elif kind == "progress":
+                    percent = float(value)
+                    self.progress_bar.configure(value=percent)
+                    self.progress_percent_var.set(f"{percent:.0f}%")
                 elif kind == "finished":
                     self.busy = False
                     self.worker = None
@@ -449,7 +485,7 @@ class WhisperSRTApp:
         if self.busy:
             close_now = messagebox.askyesno(
                 APP_TITLE,
-                "Распознавание ещё выполняется. Закрытие прервёт текущую обработку. Всё равно закрыть?",
+                "Распознавание ещё выполняется. Прервать обработку и выйти?",
             )
             if not close_now:
                 return
