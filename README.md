@@ -1,92 +1,112 @@
-# WhisperSRT — субтитры из аудио и видео
+# WhisperSRT — subtitles from audio and video
 
 [![Release](https://img.shields.io/github/v/release/DmitryLeLeE/whisp?label=release)](https://github.com/DmitryLeLeE/whisp/releases/latest)
 [![Build](https://github.com/DmitryLeLeE/whisp/actions/workflows/release.yml/badge.svg)](https://github.com/DmitryLeLeE/whisp/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 
-Программа для Windows, которая создаёт субтитры `.srt` из аудио- и видеофайлов. Распознавание идёт локально на движке [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2), файлы никуда не отправляются. Есть окно с настройками и консольная утилита.
+[Русский](README.ru.md) · **English**
 
-## Возможности
+A Windows program that creates subtitles from audio and video files and can translate them into another language. Recognition and translation run locally ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) and NLLB-200 on CTranslate2), nothing is uploaded anywhere. It has a window with settings (English and Russian) and a command-line tool.
 
-- Работает до 4 раз быстрее оригинального OpenAI Whisper, на CPU и на видеокарте NVIDIA.
-- Читает любые форматы, которые понимает FFmpeg: `.mp4`, `.mkv`, `.ts`, `.avi`, `.mov`, `.mp3`, `.wav`, `.flac`, `.m4a` и другие.
-- Пропускает тишину и паузы через VAD-фильтр, поэтому в субтитрах меньше ложных фраз.
-- Позволяет выбрать аудиодорожку, если в видео их несколько (например, оригинал и дубляж).
-- Обрабатывает очередь файлов: у каждого видны длительность, дорожка и состояние, общий прогресс и оставшееся время.
-- Сохраняет SRT, VTT, TXT, JSON и ASS, можно несколько форматов сразу.
-- Разбивает длинные реплики по числу символов в строке и длительности.
-- Переводит речь на английский.
-- Скачивает модели с индикатором загрузки, папку для моделей можно выбрать.
-- Тёмная и светлая темы, настройки запоминаются.
-- Сам подбирает тип вычислений для CPU или CUDA.
+## Features
 
-## Скачать готовую программу
+- Up to 4× faster than the original OpenAI Whisper, on CPU and on NVIDIA GPUs.
+- Reads everything FFmpeg understands: `.mp4`, `.mkv`, `.ts`, `.avi`, `.mov`, `.mp3`, `.wav`, `.flac`, `.m4a` and more.
+- Skips silence with a VAD filter, so there are fewer false phrases in the subtitles.
+- Lets you pick the audio track when a video has several (for example the original and a dub).
+- Processes a queue of files: each shows its duration, track and status, plus overall progress and the time left.
+- Saves SRT, VTT, TXT, JSON and ASS, several formats at once.
+- Splits long cues by characters per line and cue duration.
+- Translates speech to English with Whisper.
+- **Machine translation of subtitles** into 18 languages (NLLB-200): translation only, the original, or bilingual subtitles (two lines per cue).
+- Instant cancel, as well as stop after the current file.
+- Plays a sound, flashes the taskbar button and shows a Windows notification when it is done.
+- English and Russian interface, switchable on the fly.
+- Downloads models with a progress bar; the models folder is configurable.
+- Dark and light themes, settings are remembered.
+- Picks the compute type for CPU or CUDA automatically.
 
-1. Откройте раздел [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) и скачайте `WhisperSRT-Windows.zip`.
-2. Распакуйте архив в любую папку.
-3. Запустите `WhisperSRT\WhisperSRT.exe`. Python и FFmpeg устанавливать не нужно.
+## Download the ready-made program
 
-При первом запуске выбранная модель скачивается с Hugging Face и сохраняется в кэш. Дальше программа работает без интернета.
+1. Open [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) and download `WhisperSRT-Windows.zip`.
+2. Unpack the archive into any folder.
+3. Run `WhisperSRT\WhisperSRT.exe`. You do not need to install Python or FFmpeg.
 
-## Как пользоваться окном программы
+On the first run the selected model is downloaded from Hugging Face and cached. After that the program works offline.
 
-1. Добавьте файлы кнопками «Добавить файлы…» и «Добавить папку…» или перетащите их в список.
-2. Если в видео несколько звуковых дорожек, выберите файл в списке и укажите нужную дорожку под списком. По умолчанию берётся дорожка, отмеченная в самом файле.
-3. Выберите модель и язык речи. Для скорости подойдут `small` и `turbo`, для точности `medium` и `large-v3`. Рядом с моделью видно, скачана ли она. Кнопка «Скачать» загружает модель заранее.
-4. Выберите результат: субтитры на языке речи или перевод на английский.
-5. Отметьте нужные форматы. Если реплики получаются слишком длинными, включите «Разбивать на короткие реплики» и задайте число символов в строке, число строк и длительность реплики.
-6. При необходимости укажите папку для результатов и нажмите «Создать субтитры».
+## Using the window
 
-Готовые файлы называются `имя_файла.whisper.srt`, `имя_файла.whisper.vtt` и так далее, по умолчанию лежат рядом с исходниками. Если все файлы результата уже есть, исходник пропускается, пока не включена опция «Перезаписывать существующие файлы». Кнопка «Остановить» завершает текущий файл и не берёт следующие.
+1. Add files with “Add files…” and “Add folder…”, or drag them into the list.
+2. If a video has several audio tracks, select the file in the list and pick the track below the list. By default the track marked in the file itself is used.
+3. Choose the model and the speech language. `small` and `turbo` are good for speed, `medium` and `large-v3` for accuracy. Next to the model you can see whether it is downloaded; the “Download” button fetches it in advance.
+4. Choose the result: subtitles in the spoken language, translation to English by Whisper, or machine translation of the subtitles. For machine translation pick the language and tick what to save: the original, the translation, bilingual subtitles.
+5. Tick the formats you need. If cues come out too long, turn on “Split into short cues” and set characters per line, number of lines and cue duration.
+6. If needed, choose an output folder and press “Create subtitles”.
 
-Настройки сохраняются в `%APPDATA%\WhisperSRT\settings.json`. Модели по умолчанию лежат в кэше Hugging Face (`%USERPROFILE%\.cache\huggingface\hub`).
+Result files are named `file_name.whisper.srt`, `file_name.whisper.vtt` and so on, and by default are saved next to the sources. With machine translation to English you also get `file_name.whisper.en.srt` (translation) and `file_name.whisper.en.bilingual.srt` (bilingual). A source is skipped when all its result files already exist, unless “Overwrite existing files” is on. “Stop after the current file” finishes the current file and does not start the next ones; “Cancel now” interrupts the work at once, and no result files are created for the interrupted file.
 
-## Консольная утилита
+Settings are stored in `%APPDATA%\WhisperSRT\settings.json`. Models are kept in the Hugging Face cache by default (`%USERPROFILE%\.cache\huggingface\hub`).
+
+## Machine translation of subtitles
+
+Translation is done by the [NLLB-200](https://huggingface.co/facebook/nllb-200-distilled-600M) model (distilled, 600M) running on CTranslate2. It is downloaded the first time you translate (about 620 MB); after that no internet is needed. Supported languages: Russian, English, German, Ukrainian, French, Spanish, Italian, Polish, Portuguese, Turkish, Dutch, Czech, Japanese, Chinese, Korean, Arabic, Hindi and Vietnamese.
+
+The source language comes from recognition. If it equals the target language, translation is skipped. Every cue is translated on its own, so machine translation can be inexact: proofread it for anything important.
+
+> **Model license.** The NLLB-200 weights are released under **CC-BY-NC-4.0**: they may be used for non-commercial purposes only. The program code stays under MIT. If you need translation in a commercial project, point the program at a different model with the `WHISPERSRT_NLLB_REPO` environment variable (a Hugging Face repository with an NLLB model converted to the CTranslate2 format).
+
+## Command-line tool
 
 ```bash
-# Один файл
-python whisper_universal.py "video.mp4" --model turbo --language ru
+# One file
+python whisper_universal.py "video.mp4" --model turbo --language en
 
-# Вся папка, включая вложенные, результаты в отдельную папку
+# A whole folder including subfolders, results in a separate folder
 python whisper_universal.py "D:\Videos" --recursive --output-dir "D:\Subs"
 
-# Несколько форматов и короткие реплики (до 2 строк по 42 символа)
+# Several formats and short cues (up to 2 lines of 42 characters)
 python whisper_universal.py "video.mp4" -f srt,vtt,txt --max-line-chars 42
 
-# Показать аудиодорожки файла, затем выбрать нужную
+# Subtitles with an English translation: original, translation and a bilingual file
+python whisper_universal.py "video.mp4" --translate-to en --variants original,translated,bilingual
+
+# Show the audio tracks of a file, then pick one
 python whisper_universal.py "movie.mkv" --list-streams
 python whisper_universal.py "movie.mkv" --audio-stream 2
 ```
 
-| Параметр | Что делает |
+| Option | What it does |
 |---|---|
-| `-m`, `--model` | `tiny`, `base`, `small` (по умолчанию), `medium`, `large-v3`, `turbo` |
-| `-l`, `--language` | Код языка (`ru`, `en`, `de`…) или `auto` для автоопределения |
-| `--task` | `transcribe` — текст на языке оригинала, `translate` — перевод на английский |
-| `-f`, `--formats` | Форматы через запятую: `srt`, `vtt`, `txt`, `json`, `ass` (по умолчанию `srt`) |
-| `--max-line-chars` | Максимум символов в строке, `0` — не разбивать реплики |
-| `--max-lines` | Максимум строк в реплике при разбиении (по умолчанию 2) |
-| `--max-duration` | Максимальная длительность реплики в секундах, `0` — без ограничения |
-| `--model-dir` | Папка для скачанных моделей |
-| `--device` | `auto` (по умолчанию), `cpu`, `cuda` |
-| `--audio-stream` | Глобальный индекс аудиопотока FFmpeg или `auto` |
-| `-o`, `--output-dir` | Папка для SRT |
-| `-r`, `--recursive` | Искать файлы во вложенных папках |
-| `--overwrite` | Перезаписывать существующие SRT |
-| `--no-vad` | Отключить VAD-фильтр |
-| `--beam-size` | Ширина beam search (для `turbo` всегда 1) |
-| `--list-streams` | Показать потоки файла и выйти |
+| `-m`, `--model` | `tiny`, `base`, `small` (default), `medium`, `large-v3`, `turbo` |
+| `-l`, `--language` | Language code (`ru`, `en`, `de`…) or `auto` for detection |
+| `--task` | `transcribe` — text in the original language, `translate` — translation to English by Whisper |
+| `--translate-to` | Machine-translate the subtitles (NLLB-200) into the given language: `en`, `ru`, `de`… |
+| `--variants` | What to save when translating: `original`, `translated`, `bilingual`, comma-separated (default `original,translated`) |
+| `--lang` | Language of messages and help: `auto`, `ru`, `en` |
+| `-f`, `--formats` | Comma-separated formats: `srt`, `vtt`, `txt`, `json`, `ass` (default `srt`) |
+| `--max-line-chars` | Maximum characters per line, `0` — do not split cues |
+| `--max-lines` | Maximum lines per cue when splitting (default 2) |
+| `--max-duration` | Maximum cue duration in seconds, `0` — unlimited |
+| `--model-dir` | Folder for downloaded models |
+| `--device` | `auto` (default), `cpu`, `cuda` |
+| `--audio-stream` | Global FFmpeg audio stream index or `auto` |
+| `-o`, `--output-dir` | Output folder |
+| `-r`, `--recursive` | Look for files in subfolders |
+| `--overwrite` | Overwrite existing result files |
+| `--no-vad` | Disable the VAD filter |
+| `--beam-size` | Beam search width (always 1 for `turbo`) |
+| `--list-streams` | Show the streams of a file and exit |
 
-Полный список: `python whisper_universal.py --help`.
+Full list: `python whisper_universal.py --help`.
 
-## Видеокарта NVIDIA
+## NVIDIA GPU
 
-Для работы на GPU нужны драйвер NVIDIA, CUDA 12 (cuBLAS) и cuDNN 9. В готовый архив они не входят. Если в режиме «Автоматически» этих библиотек не оказалось, программа напишет об этом в журнале, переключится на CPU и повторит распознавание. Явно выбранный в консоли `--device cuda` на CPU не переключается и покажет ошибку.
+GPU mode needs the NVIDIA driver, CUDA 12 (cuBLAS) and cuDNN 9. They are not included in the archive. If these libraries are missing in “Automatic” mode, the program says so in the log, switches to CPU and repeats the recognition. A `--device cuda` chosen explicitly on the command line does not fall back to CPU and shows the error.
 
-## Запуск из исходного кода
+## Run from source
 
-Нужен Python 3.9–3.12.
+Python 3.9–3.12 is required. The icon lives in `assets/` and the interface strings in `i18n.py`.
 
 ```bash
 git clone https://github.com/DmitryLeLeE/whisp.git
@@ -97,36 +117,36 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Скачайте сборку FFmpeg для Windows (например, с [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) или [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases)) и положите `ffmpeg.exe` и `ffprobe.exe` в папку `ffmpeg_bin/` в корне проекта. Если FFmpeg уже есть в `PATH`, этот шаг можно пропустить.
+Download a Windows FFmpeg build (for example from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases)) and put `ffmpeg.exe` and `ffprobe.exe` into the `ffmpeg_bin/` folder in the project root. If FFmpeg is already in `PATH`, you can skip this step.
 
 ```bash
-# Окно программы
+# The window
 python WhisperSRT_GUI.py
 
-# Консольная утилита
-python whisper_universal.py "video.mp4" --model turbo --language ru
+# The command-line tool
+python whisper_universal.py "video.mp4" --model turbo --language en
 ```
 
-## Сборка своего `.exe`
+## Build your own `.exe`
 
 ```cmd
 pip install -r requirements-build.txt
 build.bat
 ```
 
-Результат появится в папке `dist\WhisperSRT\`. Для переноса на другой компьютер скопируйте её целиком.
+The result appears in `dist\WhisperSRT\`. Copy the whole folder to move it to another computer.
 
-## Выпуск релиза
+## Releasing
 
-Релиз собирается автоматически в GitHub Actions по тегу:
+A release is built automatically by GitHub Actions from a tag:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
-Workflow [`release.yml`](.github/workflows/release.yml) скачает FFmpeg, соберёт приложение, проверит его запуском `WhisperSRT.exe --selftest`, упакует `WhisperSRT-Windows.zip` и прикрепит его к релизу. Если релиз с таким тегом уже создан вручную на GitHub, архив добавляется к нему. Запустить сборку без тега можно вручную на вкладке Actions: архив появится в артефактах запуска.
+The [`release.yml`](.github/workflows/release.yml) workflow checks the translation tables, downloads FFmpeg, builds the app, prints the build size, checks it by running `WhisperSRT.exe --selftest`, packs `WhisperSRT-Windows.zip` and attaches it to the release. If a release with that tag was already created by hand on GitHub, the archive is added to it. You can also start a build without a tag on the Actions tab: the archive appears in the run's artifacts.
 
-## Лицензия
+## License
 
-[MIT](LICENSE). FFmpeg и модели Whisper распространяются под собственными лицензиями.
+Code: [MIT](LICENSE). FFmpeg, the Whisper models and the NLLB-200 translation model (CC-BY-NC-4.0, non-commercial use only) are distributed under their own licenses.

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import logging
 import os
@@ -20,10 +19,17 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 import ffmpeg
 
+import hub
+import i18n
+from hub import Cancelled
+from i18n import t
+
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
 
-__version__ = "1.1.0"
+    from translator import SubtitleTranslator
+
+__version__ = "1.2.0"
 
 LOG = logging.getLogger("whisper_universal")
 
@@ -37,8 +43,9 @@ SUPPORTED_EXTENSIONS = {
 
 MODEL_CHOICES = ("tiny", "base", "small", "medium", "large-v3", "turbo")
 OUTPUT_FORMATS = ("srt", "vtt", "txt", "json", "ass")
+VARIANTS = ("original", "translated", "bilingual")
 
-# Запасная таблица на случай, если в faster-whisper изменится внутренний словарь моделей.
+# Fallback table in case faster-whisper changes its internal model dictionary.
 FALLBACK_MODEL_REPOS = {
     "tiny": "Systran/faster-whisper-tiny",
     "base": "Systran/faster-whisper-base",
@@ -54,13 +61,14 @@ MODEL_ALLOW_PATTERNS = [
     "tokenizer.json",
     "vocabulary.*",
 ]
+MODEL_REQUIRED = ["model.bin", "config.json"]
 
 SENTENCE_END = (".", "!", "?", "…", "。", "！", "？")
 CUDA_ERROR_MARKERS = ("cublas", "cudnn", "cufft", "curand", "nvrtc", "cuda")
 
 
 # --------------------------------------------------------------------------------------
-# Аргументы командной строки
+# Command line
 # --------------------------------------------------------------------------------------
 def parse_formats(value: str | list[str] | tuple[str, ...]) -> list[str]:
     items = value.split(",") if isinstance(value, str) else list(value)
@@ -70,79 +78,102 @@ def parse_formats(value: str | list[str] | tuple[str, ...]) -> list[str]:
         if not fmt:
             continue
         if fmt not in OUTPUT_FORMATS:
-            raise ValueError(f"Неизвестный формат '{fmt}'. Доступны: {', '.join(OUTPUT_FORMATS)}.")
+            raise ValueError(t("err.unknown_format", fmt=fmt, available=", ".join(OUTPUT_FORMATS)))
         if fmt not in result:
             result.append(fmt)
     if not result:
-        raise ValueError("Не выбран ни один формат вывода.")
+        raise ValueError(t("err.no_format"))
     return result
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Распознаёт речь в аудио/видео и сохраняет субтитры (SRT, VTT, TXT, JSON, ASS)."
-    )
-    parser.add_argument("input", type=Path, nargs="?", help="Путь к медиафайлу или папке с файлами.")
-    parser.add_argument("-o", "--output-dir", type=Path, default=None,
-                        help="Папка для результатов. Если не указана, файлы сохраняются рядом с исходниками.")
-    parser.add_argument("-r", "--recursive", action="store_true",
-                        help="Искать медиафайлы в подпапках (для входной папки).")
-    parser.add_argument("-m", "--model", choices=MODEL_CHOICES, default="small",
-                        help="Модель Whisper (по умолчанию: small).")
-    parser.add_argument("--model-dir", type=Path, default=None,
-                        help="Папка, куда скачиваются модели и где они ищутся. По умолчанию кэш Hugging Face.")
-    parser.add_argument("-l", "--language", default="auto",
-                        help="Язык речи: ru, en, de и т. п.; auto включает автоопределение.")
-    parser.add_argument("--task", choices=("transcribe", "translate"), default="transcribe",
-                        help="transcribe = текст на исходном языке; translate = перевод на английский.")
-    parser.add_argument("-f", "--formats", default="srt",
-                        help="Форматы вывода через запятую: srt, vtt, txt, json, ass (по умолчанию: srt).")
-    parser.add_argument("--max-line-chars", type=int, default=0,
-                        help="Максимум символов в строке субтитров. 0 = не разбивать (как выдаёт модель).")
-    parser.add_argument("--max-lines", type=int, default=2,
-                        help="Максимум строк в одной реплике при разбиении (по умолчанию 2).")
-    parser.add_argument("--max-duration", type=float, default=0.0,
-                        help="Максимальная длительность реплики в секундах. 0 = без ограничения.")
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
-                        help="Вычислительное устройство. auto использует CUDA, если она доступна.")
-    parser.add_argument("--audio-stream", default="auto",
-                        help="Глобальный индекс аудиопотока FFmpeg (например, 2) или auto.")
-    parser.add_argument("--temp-dir", type=Path, default=None,
-                        help="Папка для временных WAV-файлов.")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="Перезаписывать уже существующие файлы результатов.")
-    parser.add_argument("--beam-size", type=int, default=5,
-                        help="Ширина beam search (по умолчанию 5). Для turbo автоматически используется 1.")
-    parser.add_argument("--vad-filter", action="store_true", default=True,
-                        help="Включить VAD-фильтр (пропуск тишины). Включён по умолчанию.")
-    parser.add_argument("--no-vad", action="store_false", dest="vad_filter",
-                        help="Отключить VAD-фильтр.")
-    parser.add_argument("--quiet-progress", action="store_true",
-                        help="Не выводить подробный прогресс.")
-    parser.add_argument("--list-streams", action="store_true",
-                        help="Показать потоки одного медиафайла и завершить работу.")
-    parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"),
-                        default="INFO", help="Уровень сообщений журнала.")
+def parse_variants(value: str | list[str] | tuple[str, ...]) -> list[str]:
+    items = value.split(",") if isinstance(value, str) else list(value)
+    result: list[str] = []
+    for item in items:
+        name = item.strip().lower()
+        if not name:
+            continue
+        if name not in VARIANTS:
+            raise ValueError(t("err.unknown_variant", name=name, available=", ".join(VARIANTS)))
+        if name not in result:
+            result.append(name)
+    if not result:
+        raise ValueError(t("err.no_variant"))
+    return result
+
+
+def _preparse_language(argv: list[str]) -> str:
+    """Language of messages: --lang is read before the main parser so that --help is translated too."""
+    for position, item in enumerate(argv):
+        if item.startswith("--lang="):
+            return item.split("=", 1)[1]
+        if item == "--lang" and position + 1 < len(argv):
+            return argv[position + 1]
+    return "auto"
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    i18n.set_language(_preparse_language(argv))
+
+    from translator import LANGUAGE_CODES
+
+    parser = argparse.ArgumentParser(description=t("help.description"))
+    parser.add_argument("input", type=Path, nargs="?", help=t("help.input"))
+    parser.add_argument("-o", "--output-dir", type=Path, default=None, help=t("help.output_dir"))
+    parser.add_argument("-r", "--recursive", action="store_true", help=t("help.recursive"))
+    parser.add_argument("-m", "--model", choices=MODEL_CHOICES, default="small", help=t("help.model"))
+    parser.add_argument("--model-dir", type=Path, default=None, help=t("help.model_dir"))
+    parser.add_argument("-l", "--language", default="auto", help=t("help.language"))
+    parser.add_argument("--task", choices=("transcribe", "translate"), default="transcribe", help=t("help.task"))
+    parser.add_argument("--translate-to", default="", metavar="LANG", help=t("help.translate_to", langs=", ".join(LANGUAGE_CODES)))
+    parser.add_argument("--variants", default="original,translated", help=t("help.variants"))
+    parser.add_argument("-f", "--formats", default="srt", help=t("help.formats"))
+    parser.add_argument("--max-line-chars", type=int, default=0, help=t("help.max_line_chars"))
+    parser.add_argument("--max-lines", type=int, default=2, help=t("help.max_lines"))
+    parser.add_argument("--max-duration", type=float, default=0.0, help=t("help.max_duration"))
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto", help=t("help.device"))
+    parser.add_argument("--audio-stream", default="auto", help=t("help.audio_stream"))
+    parser.add_argument("--temp-dir", type=Path, default=None, help=t("help.temp_dir"))
+    parser.add_argument("--overwrite", action="store_true", help=t("help.overwrite"))
+    parser.add_argument("--beam-size", type=int, default=5, help=t("help.beam_size"))
+    parser.add_argument("--vad-filter", action="store_true", default=True, help=t("help.vad"))
+    parser.add_argument("--no-vad", action="store_false", dest="vad_filter", help=t("help.no_vad"))
+    parser.add_argument("--quiet-progress", action="store_true", help=t("help.quiet"))
+    parser.add_argument("--list-streams", action="store_true", help=t("help.list_streams"))
+    parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO",
+                        help=t("help.log_level"))
+    parser.add_argument("--lang", choices=("auto", "ru", "en"), default="auto", help=t("help.lang"))
     parser.add_argument("--version", action="version", version=f"WhisperSRT {__version__}")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.input is None:
-        parser.error("не указан входной файл или папка.")
+        parser.error(t("err.no_input"))
 
     try:
         args.formats = parse_formats(args.formats)
+        args.variants = parse_variants(args.variants)
     except ValueError as exc:
         parser.error(str(exc))
     if args.max_line_chars < 0 or args.max_lines < 1 or args.max_duration < 0:
-        parser.error("--max-line-chars и --max-duration не могут быть отрицательными, --max-lines должен быть не меньше 1.")
+        parser.error(t("err.bad_limits"))
+
+    args.translate_to = args.translate_to.strip().lower()
+    if args.translate_to:
+        if args.translate_to not in LANGUAGE_CODES:
+            parser.error(t("err.bad_translate_to", lang=args.translate_to, langs=", ".join(LANGUAGE_CODES)))
+        if args.task == "translate":
+            parser.error(t("err.task_and_mt"))
+    else:
+        args.variants = ["original"]
 
     if args.audio_stream != "auto":
         try:
             args.audio_stream = int(args.audio_stream)
             if args.audio_stream < 0:
-                parser.error("--audio-stream должен быть 'auto' или неотрицательным индексом.")
+                parser.error(t("err.bad_stream"))
         except ValueError:
-            parser.error("--audio-stream должен быть 'auto' или целым индексом, например 2.")
+            parser.error(t("err.bad_stream_int"))
 
     args.input = args.input.expanduser().resolve()
     if args.output_dir is not None:
@@ -161,17 +192,15 @@ def setup_logging(level: str) -> None:
         datefmt="%H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
-
-
 # --------------------------------------------------------------------------------------
-# FFmpeg: потоки и извлечение звука
+# FFmpeg: streams and audio extraction
 # --------------------------------------------------------------------------------------
 def probe_media(path: Path) -> dict[str, Any]:
     try:
         return ffmpeg.probe(str(path))
     except ffmpeg.Error as exc:
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
-        raise RuntimeError(f"FFmpeg не смог прочитать файл: {stderr.strip()}") from exc
+        raise RuntimeError(t("err.ffmpeg_read", detail=stderr.strip())) from exc
 
 
 def get_audio_streams(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -193,15 +222,15 @@ def describe_audio_stream(stream: dict[str, Any]) -> str:
     parts.append(str(stream.get("codec_name", "?")))
     channels = stream.get("channels")
     if channels:
-        parts.append(f"{channels} кан.")
+        parts.append(t("stream.channels", n=channels))
     label = " · ".join(parts)
     if disposition.get("default") == 1:
-        label += " (по умолчанию)"
+        label += t("stream.default")
     return label
 
 
 def probe_audio_info(path: Path) -> tuple[float, list[tuple[int, str]]]:
-    """Возвращает длительность файла в секундах и список (индекс потока, подпись) его аудиодорожек."""
+    """Returns the file duration in seconds and a list of (stream index, label) for its audio tracks."""
     probe, streams = get_audio_streams(path)
     try:
         duration = float((probe.get("format") or {}).get("duration") or 0.0)
@@ -217,40 +246,37 @@ def print_streams(path: Path) -> bool:
         LOG.error("%s", exc)
         return False
 
-    LOG.info("Файл: %s", path)
+    LOG.info(t("log.file", path=path))
     if not audio_streams:
-        LOG.warning("Аудиопотоки не найдены.")
+        LOG.warning(t("log.no_audio_streams"))
         return False
 
     for position, stream in enumerate(audio_streams, start=1):
         index = stream.get("index", "?")
         tags = stream.get("tags") or {}
         disposition = stream.get("disposition") or {}
-        language = tags.get("language", "не указан")
+        language = tags.get("language", t("stream.unspecified"))
         title = tags.get("title", "")
-        codec = stream.get("codec_name", "неизвестно")
+        codec = stream.get("codec_name", t("stream.unknown"))
         channels = stream.get("channels", "?")
         sample_rate = stream.get("sample_rate", "?")
         default = " [DEFAULT]" if disposition.get("default") == 1 else ""
-        title_text = f", название: {title}" if title else ""
-        LOG.info("Аудиодорожка %d: индекс FFmpeg=%s, язык=%s, кодек=%s, каналов=%s, Hz=%s%s%s",
-                 position, index, language, codec, channels, sample_rate, title_text, default)
+        title_text = t("log.stream_title", title=title) if title else ""
+        LOG.info(t("log.stream_line", position=position, index=index, language=language, codec=codec,
+                   channels=channels, rate=sample_rate, title=title_text, default=default))
     return True
 
 
 def choose_audio_stream(audio_streams: list[dict[str, Any]], requested: str | int) -> dict[str, Any]:
     if not audio_streams:
-        raise RuntimeError("В файле не найдено ни одной аудиодорожки.")
+        raise RuntimeError(t("err.no_audio"))
 
     if requested != "auto":
         for stream in audio_streams:
             if stream.get("index") == requested:
                 return stream
         available = ", ".join(str(s.get("index")) for s in audio_streams)
-        raise RuntimeError(
-            f"Аудиопоток с глобальным индексом {requested} не найден. "
-            f"Доступные индексы аудиопотоков: {available}. Используйте --list-streams."
-        )
+        raise RuntimeError(t("err.stream_not_found", requested=requested, available=available))
 
     defaults = [s for s in audio_streams if (s.get("disposition") or {}).get("default") == 1]
     return defaults[0] if defaults else audio_streams[0]
@@ -279,17 +305,18 @@ def extract_audio_track(video_path: Path, output_audio_path: Path, stream_index:
         )
     except ffmpeg.Error as exc:
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
-        raise RuntimeError(f"Ошибка извлечения аудио через FFmpeg: {stderr.strip()}") from exc
+        raise RuntimeError(t("err.ffmpeg_extract", detail=stderr.strip())) from exc
+
 
 
 # --------------------------------------------------------------------------------------
-# Реплики субтитров и форматы вывода
+# Subtitle cues and output formats
 # --------------------------------------------------------------------------------------
 @dataclass
 class Cue:
     start: float
     end: float
-    text: str  # строки разделены символом \n
+    text: str  # lines are separated by \n
 
 
 def _clean_text(text: str) -> str:
@@ -298,7 +325,7 @@ def _clean_text(text: str) -> str:
 
 
 def _segment_words(segment: Any) -> list[tuple[float, float, str]]:
-    """Слова сегмента с временем. Если модель не дала пословных меток, время делится пропорционально длине слов."""
+    """Words of a segment with timing. Without word timestamps the time is split in proportion to word length."""
     words = getattr(segment, "words", None)
     result: list[tuple[float, float, str]] = []
     if words:
@@ -336,7 +363,7 @@ def segments_to_cues(
     max_lines: int = 2,
     max_duration: float = 0.0,
 ) -> list[Cue]:
-    """Превращает сегменты модели в реплики. Без ограничений реплика = сегмент модели."""
+    """Turns model segments into cues. Without limits a cue equals a model segment."""
     if max_line_chars <= 0 and max_duration <= 0:
         cues = []
         for segment in segments:
@@ -422,10 +449,11 @@ def render_txt(cues: list[Cue], **_: Any) -> str:
 
 
 def render_json(cues: list[Cue], language: str | None = None, duration: float = 0.0,
-                task: str = "transcribe", **_: Any) -> str:
+                task: str = "transcribe", translated_to: str | None = None, **_: Any) -> str:
     payload = {
         "language": language,
         "task": task,
+        "translated_to": translated_to,
         "duration": round(float(duration), 3),
         "segments": [
             {"id": number, "start": round(cue.start, 3), "end": round(cue.end, 3),
@@ -459,8 +487,7 @@ def render_ass(cues: list[Cue], **_: Any) -> str:
         lines.append(f"Dialogue: 0,{format_ass_time(cue.start)},{format_ass_time(cue.end)},Default,,0,0,0,,{text}")
     return ASS_HEADER + "\n".join(lines) + "\n"
 
-
-# формат -> (функция, кодировка)
+# format -> (renderer, encoding)
 FORMAT_WRITERS: dict[str, tuple[Callable[..., str], str]] = {
     "srt": (render_srt, "utf-8-sig"),
     "vtt": (render_vtt, "utf-8"),
@@ -468,6 +495,11 @@ FORMAT_WRITERS: dict[str, tuple[Callable[..., str], str]] = {
     "json": (render_json, "utf-8"),
     "ass": (render_ass, "utf-8-sig"),
 }
+
+
+def make_bilingual(original: list[Cue], translated: list[Cue]) -> list[Cue]:
+    """Original line(s) first, the translation below them."""
+    return [Cue(o.start, o.end, o.text + "\n" + tr.text) for o, tr in zip(original, translated)]
 
 
 def write_text_atomic(path: Path, content: str, encoding: str) -> None:
@@ -482,16 +514,19 @@ def write_text_atomic(path: Path, content: str, encoding: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def write_outputs(cues: list[Cue], outputs: dict[str, Path], language: str | None,
-                  duration: float, task: str) -> None:
-    for fmt, path in outputs.items():
+def write_outputs(cue_sets: dict[str, list[Cue]], outputs: dict[tuple[str, str], Path], language: str | None,
+                  duration: float, task: str, translated_to: str | None = None) -> None:
+    """Writes every (variant, format) pair from `outputs` using the cues of that variant."""
+    for (variant, fmt), path in outputs.items():
         render, encoding = FORMAT_WRITERS[fmt]
-        write_text_atomic(path, render(cues, language=language, duration=duration, task=task), encoding)
-        LOG.info("Сохранено (%s): %s", fmt.upper(), path)
+        content = render(cue_sets[variant], language=language, duration=duration, task=task,
+                         translated_to=None if variant == "original" else translated_to)
+        write_text_atomic(path, content, encoding)
+        LOG.info(t("log.saved", fmt=fmt.upper(), path=path))
 
 
 # --------------------------------------------------------------------------------------
-# Устройство и модель
+# Device and models
 # --------------------------------------------------------------------------------------
 def resolve_device(requested: str) -> str:
     if requested == "auto":
@@ -510,15 +545,15 @@ def get_compute_type(device: str) -> str:
     try:
         import ctranslate2
         supported = ctranslate2.get_supported_compute_types("cuda")
-        LOG.info("Поддерживаемые compute_type на CUDA: %s", supported)
+        LOG.info(t("log.compute_supported", supported=supported))
         for candidate in ("float16", "int8_float16", "bfloat16", "float32"):
             if candidate in supported:
-                LOG.info("Выбран compute_type: %s", candidate)
+                LOG.info(t("log.compute_chosen", name=candidate))
                 return candidate
-        LOG.warning("Ни один из предпочтительных типов не найден, использую float32.")
+        LOG.warning(t("log.compute_none"))
         return "float32"
     except Exception as exc:
-        LOG.warning("Не удалось получить список поддерживаемых compute_type (%s). Использую int8.", exc)
+        LOG.warning(t("log.compute_error", error=exc))
         return "int8"
 
 
@@ -533,44 +568,11 @@ def model_repo_id(name: str) -> str | None:
 
 
 def find_cached_model(name: str, cache_dir: Path | None = None) -> Path | None:
-    """Папка скачанной модели или None, если модели ещё нет на диске."""
+    """Folder of a downloaded model, or None if the model is not on disk yet."""
     repo = model_repo_id(name)
     if repo is None:
         return None
-    try:
-        from huggingface_hub import snapshot_download
-        kwargs: dict[str, Any] = {"allow_patterns": MODEL_ALLOW_PATTERNS, "local_files_only": True}
-        if cache_dir:
-            kwargs["cache_dir"] = str(cache_dir)
-        path = Path(snapshot_download(repo, **kwargs))
-    except Exception:
-        return None
-    return path if (path / "model.bin").is_file() and (path / "config.json").is_file() else None
-
-
-def _hub_cache_root(cache_dir: Path | None) -> Path:
-    if cache_dir:
-        return Path(cache_dir)
-    try:
-        from huggingface_hub import constants
-        return Path(constants.HF_HUB_CACHE)
-    except Exception:
-        return Path.home() / ".cache" / "huggingface" / "hub"
-
-
-def _directory_size(path: Path) -> int:
-    total = 0
-    try:
-        with os.scandir(path) as entries:
-            for entry in entries:
-                try:
-                    if entry.is_file():
-                        total += entry.stat().st_size
-                except OSError:
-                    continue
-    except OSError:
-        return 0
-    return total
+    return hub.find_cached_repo(repo, MODEL_ALLOW_PATTERNS, MODEL_REQUIRED, cache_dir)
 
 
 def download_model(
@@ -578,54 +580,11 @@ def download_model(
     cache_dir: Path | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> Path:
-    """Скачивает модель (если её нет) и сообщает прогресс как (скачано байт, всего байт)."""
-    cached = find_cached_model(name, cache_dir)
-    if cached is not None:
-        if progress:
-            progress(1, 1)
-        return cached
-
+    """Downloads the model if missing; reports progress as (bytes done, bytes total)."""
     repo = model_repo_id(name)
     if repo is None:
-        raise ValueError(f"Неизвестная модель: {name}")
-
-    from huggingface_hub import HfApi, snapshot_download
-
-    total = 0
-    try:
-        info = HfApi().model_info(repo, files_metadata=True)
-        for sibling in info.siblings or []:
-            if any(fnmatch.fnmatch(sibling.rfilename, pattern) for pattern in MODEL_ALLOW_PATTERNS):
-                total += int(sibling.size or 0)
-    except Exception as exc:
-        LOG.warning("Не удалось узнать размер модели (%s). Прогресс будет приблизительным.", exc)
-
-    blobs_dir = _hub_cache_root(cache_dir) / f"models--{repo.replace('/', '--')}" / "blobs"
-    stop = threading.Event()
-
-    def watch() -> None:
-        last = -1
-        while not stop.wait(0.4):
-            done = _directory_size(blobs_dir)
-            if done != last and progress:
-                progress(min(done, total) if total else done, total)
-                last = done
-
-    watcher = threading.Thread(target=watch, daemon=True)
-    watcher.start()
-    LOG.info("Скачиваю модель '%s' (%s)…", name, repo)
-    try:
-        kwargs: dict[str, Any] = {"allow_patterns": MODEL_ALLOW_PATTERNS}
-        if cache_dir:
-            kwargs["cache_dir"] = str(cache_dir)
-        path = Path(snapshot_download(repo, **kwargs))
-    finally:
-        stop.set()
-        watcher.join(timeout=2)
-    if progress:
-        progress(total or 1, total or 1)
-    LOG.info("Модель '%s' скачана.", name)
-    return path
+        raise ValueError(t("err.unknown_model", name=name))
+    return hub.download_repo(repo, MODEL_ALLOW_PATTERNS, MODEL_REQUIRED, cache_dir, progress, label=name)
 
 
 def create_model(
@@ -634,7 +593,7 @@ def create_model(
     compute_type: str,
     cache_dir: Path | None = None,
 ) -> WhisperModel:
-    from faster_whisper import WhisperModel  # тяжёлый импорт: только когда модель действительно нужна
+    from faster_whisper import WhisperModel  # heavy import: only when the model is really needed
 
     cpu_threads = min(8, os.cpu_count() or 4)
     cached = find_cached_model(model_name, cache_dir)
@@ -647,8 +606,28 @@ def create_model(
     )
 
 
+class TranslatorProvider:
+    """Downloads (if needed) and loads the NLLB translator on first use, then keeps it."""
+
+    def __init__(self, device: str, cache_dir: Path | None = None,
+                 download_progress: Callable[[int, int], None] | None = None) -> None:
+        self.device = device
+        self.cache_dir = cache_dir
+        self.download_progress = download_progress
+        self._translator: SubtitleTranslator | None = None
+
+    def get(self) -> SubtitleTranslator:
+        if self._translator is None:
+            import translator as mt
+            path = mt.download_translator(self.cache_dir, self.download_progress)
+            LOG.info(t("log.mt_loading"))
+            self._translator = mt.SubtitleTranslator(path, self.device)
+            LOG.info(t("log.mt_ready"))
+        return self._translator
+
+
 # --------------------------------------------------------------------------------------
-# Распознавание
+# Transcription
 # --------------------------------------------------------------------------------------
 def _is_cuda_error(exc: Exception) -> bool:
     text = str(exc).lower()
@@ -664,6 +643,7 @@ def _run_transcription(
     progress_callback: Callable[[float, float], None] | None,
 ) -> tuple[list[Any], float, str | None]:
     word_level = getattr(args, "max_line_chars", 0) > 0 or getattr(args, "max_duration", 0) > 0
+    cancel: threading.Event | None = getattr(args, "cancel_event", None)
     segments_generator, info = model.transcribe(
         str(audio_path),
         language=language,
@@ -677,11 +657,13 @@ def _run_transcription(
     )
 
     total_duration = float(getattr(info, "duration", 0.0) or 0.0)
-    LOG.info("Длительность аудио: %.1f сек (определён язык: %s)", total_duration, info.language)
+    LOG.info(t("log.duration", seconds=total_duration, language=info.language))
 
     segments: list[Any] = []
     last_percent = -1.0
     for segment in segments_generator:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
         segments.append(segment)
         if progress_callback is not None and total_duration > 0:
             percent = (segment.end / total_duration) * 100.0
@@ -689,25 +671,72 @@ def _run_transcription(
             if abs(percent - last_percent) >= 0.5:
                 progress_callback(segment.end, total_duration)
                 last_percent = percent
+    if cancel is not None and cancel.is_set():
+        raise Cancelled()
     return segments, total_duration, info.language
+
+
+def _wrap_if_needed(text: str, args: argparse.Namespace) -> str:
+    width = getattr(args, "max_line_chars", 0)
+    if width > 0:
+        return wrap_cue_text(text, width, max(1, getattr(args, "max_lines", 2)))
+    return text
+
+
+def build_cue_sets(
+    cues: list[Cue],
+    wanted: set[str],
+    source_lang: str | None,
+    args: argparse.Namespace,
+    translator_provider: TranslatorProvider | None,
+    translate_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, list[Cue]]:
+    """Cues for each requested variant; translates with NLLB when 'translated' or 'bilingual' is requested."""
+    cue_sets: dict[str, list[Cue]] = {"original": cues}
+    if not (wanted & {"translated", "bilingual"}):
+        return cue_sets
+
+    target = getattr(args, "translate_to", "")
+    if not target or translator_provider is None:
+        raise RuntimeError(t("err.mt_not_configured"))
+    source = (source_lang or "").lower()
+
+    if source == target:
+        LOG.warning(t("log.mt_same_language", lang=target))
+        translated = [Cue(c.start, c.end, c.text) for c in cues]
+    elif not cues:
+        translated = []
+    else:
+        translator = translator_provider.get()
+        LOG.info(t("log.mt_start", source=source, target=target, count=len(cues)))
+        texts = translator.translate([c.text for c in cues], source, target,
+                                     cancel=getattr(args, "cancel_event", None), progress=translate_progress)
+        translated = [Cue(c.start, c.end, _wrap_if_needed(text, args)) for c, text in zip(cues, texts)]
+        LOG.info(t("log.mt_done"))
+
+    cue_sets["translated"] = translated
+    cue_sets["bilingual"] = make_bilingual(cues, translated)
+    return cue_sets
 
 
 def transcribe_one(
     source: Path,
-    outputs: dict[str, Path],
+    outputs: dict[tuple[str, str], Path],
     model: WhisperModel,
     model_name: str,
     device: str,
     args: argparse.Namespace,
     progress_callback: Callable[[float, float], None] | None = None,
+    translator_provider: TranslatorProvider | None = None,
+    translate_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[WhisperModel, str]:
     _, audio_streams = get_audio_streams(source)
     selected_stream = choose_audio_stream(audio_streams, args.audio_stream)
     stream_index = int(selected_stream["index"])
     tags = selected_stream.get("tags") or {}
-    LOG.info("Источник: %s | аудиопоток %s | язык дорожки: %s | кодек: %s",
-             source.name, stream_index, tags.get("language", "не указан"),
-             selected_stream.get("codec_name", "неизвестно"))
+    LOG.info(t("log.source", name=source.name, index=stream_index,
+               language=tags.get("language", t("stream.unspecified")),
+               codec=selected_stream.get("codec_name", t("stream.unknown"))))
 
     if args.temp_dir:
         args.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -720,26 +749,28 @@ def transcribe_one(
     with tempfile.TemporaryDirectory(prefix="whisper_transcribe_", dir=temporary_parent) as temp_name:
         audio_path = Path(temp_name) / "audio.wav"
         extract_audio_track(source, audio_path, stream_index)
-        LOG.info("Начинаю распознавание: %s", source.name)
+        LOG.info(t("log.transcribing", name=source.name))
 
-        # Для turbo модели beam=1 дает практически то же качество, но работает в 2x быстрее
+        # For the turbo model beam=1 gives almost the same quality twice as fast
         effective_beam = 1 if "turbo" in model_name.lower() else getattr(args, "beam_size", 5)
 
         try:
             segments, total_duration, detected = _run_transcription(
                 model, audio_path, language, effective_beam, args, progress_callback)
+        except Cancelled:
+            raise
         except Exception as exc:
-            # Видеокарта есть, но не хватает библиотек CUDA (cuBLAS/cuDNN): переходим на CPU.
-            # Если пользователь явно выбрал cuda, ошибку не скрываем.
+            # A GPU exists but the CUDA libraries (cuBLAS/cuDNN) are missing: fall back to CPU.
+            # If the user explicitly chose cuda, the error is not hidden.
             if device != "cuda" or getattr(args, "device", "auto") == "cuda" or not _is_cuda_error(exc):
                 raise
-            LOG.warning("Ошибка CUDA (%s). Переключаюсь на CPU и повторяю распознавание.", exc)
+            LOG.warning(t("log.cuda_fallback", error=exc))
             model = create_model(model_name, "cpu", "int8", getattr(args, "model_dir", None))
             device = "cpu"
             segments, total_duration, detected = _run_transcription(
                 model, audio_path, language, effective_beam, args, progress_callback)
 
-        LOG.info("Распознано сегментов: %d", len(segments))
+        LOG.info(t("log.segments", count=len(segments)))
 
     if progress_callback is not None:
         progress_callback(total_duration, total_duration)
@@ -750,23 +781,26 @@ def transcribe_one(
         max_lines=getattr(args, "max_lines", 2),
         max_duration=getattr(args, "max_duration", 0.0),
     )
-    LOG.info("Реплик субтитров: %d", len(cues))
-    write_outputs(cues, outputs, detected, total_duration, args.task)
+    LOG.info(t("log.cues", count=len(cues)))
+    wanted = {variant for variant, _ in outputs}
+    cue_sets = build_cue_sets(cues, wanted, detected or language, args, translator_provider, translate_progress)
+    write_outputs(cue_sets, outputs, detected, total_duration, args.task,
+                  translated_to=getattr(args, "translate_to", "") or None)
     return model, device
 
 
 # --------------------------------------------------------------------------------------
-# Файлы
+# Files
 # --------------------------------------------------------------------------------------
 def find_input_files(input_path: Path, recursive: bool) -> tuple[list[Path], Path | None]:
     if not input_path.exists():
-        raise FileNotFoundError(f"Путь не существует: {input_path}")
+        raise FileNotFoundError(t("err.path_missing", path=input_path))
     if input_path.is_file():
         if input_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Расширение {input_path.suffix or '(без расширения)'} не входит в список поддерживаемых.")
+            raise ValueError(t("err.bad_extension", ext=input_path.suffix or t("err.no_extension")))
         return [input_path], None
     if not input_path.is_dir():
-        raise ValueError(f"Это не файл и не папка: {input_path}")
+        raise ValueError(t("err.not_file_or_dir", path=input_path))
 
     candidates = input_path.rglob("*") if recursive else input_path.iterdir()
     files = sorted(
@@ -776,8 +810,16 @@ def find_input_files(input_path: Path, recursive: bool) -> tuple[list[Path], Pat
     return files, input_path
 
 
-def output_path_for(source: Path, output_dir: Path | None, input_root: Path | None, ext: str = "srt") -> Path:
-    filename = f"{source.stem}.whisper.{ext}"
+def output_path_for(source: Path, output_dir: Path | None, input_root: Path | None, ext: str = "srt",
+                    variant: str = "original", target: str = "") -> Path:
+    """original: name.whisper.srt | translated: name.whisper.en.srt | bilingual: name.whisper.en.bilingual.srt"""
+    if variant == "translated":
+        suffix = f".{target}"
+    elif variant == "bilingual":
+        suffix = f".{target}.bilingual"
+    else:
+        suffix = ""
+    filename = f"{source.stem}.whisper{suffix}.{ext}"
     if output_dir is None:
         return source.with_name(filename)
     if input_root is not None:
@@ -787,17 +829,33 @@ def output_path_for(source: Path, output_dir: Path | None, input_root: Path | No
 
 
 def output_paths_for(source: Path, output_dir: Path | None, input_root: Path | None,
-                     formats: list[str]) -> dict[str, Path]:
-    return {fmt: output_path_for(source, output_dir, input_root, fmt) for fmt in formats}
+                     formats: list[str], variants: list[str] | tuple[str, ...] = ("original",),
+                     target: str = "") -> dict[tuple[str, str], Path]:
+    return {(variant, fmt): output_path_for(source, output_dir, input_root, fmt, variant, target)
+            for variant in variants for fmt in formats}
 
 
-def main() -> int:
-    args = parse_args()
+def _percent_logger(key: str) -> Callable[[int, int], None]:
+    last = [-10]
+
+    def log_progress(done: int, total: int) -> None:
+        if total <= 0:
+            return
+        percent = int(done * 100 / total)
+        if percent >= last[0] + 10:
+            last[0] = percent - percent % 10
+            LOG.info(t(key, percent=percent, done=done / 1048576, total=total / 1048576))
+
+    return log_progress
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     setup_logging(args.log_level)
 
     if args.list_streams:
         if not args.input.is_file():
-            LOG.error("--list-streams работает только с одним медиафайлом.")
+            LOG.error(t("err.list_streams_single"))
             return 2
         return 0 if print_streams(args.input) else 1
 
@@ -808,31 +866,24 @@ def main() -> int:
         return 2
 
     if not files:
-        LOG.error("В указанном месте не найдено поддерживаемых медиафайлов.")
+        LOG.error(t("err.no_files"))
         return 1
 
-    LOG.info("Найдено файлов: %d", len(files))
+    LOG.info(t("log.found_files", count=len(files)))
+    provider: TranslatorProvider | None = None
     try:
         device = resolve_device(args.device)
         compute_type = get_compute_type(device)
 
-        last_logged = [-10]
-
-        def log_download(done: int, total: int) -> None:
-            if total <= 0:
-                return
-            percent = int(done * 100 / total)
-            if percent >= last_logged[0] + 10:
-                last_logged[0] = percent - percent % 10
-                LOG.info("Загрузка модели: %d%% (%.0f из %.0f МБ)", percent, done / 1048576, total / 1048576)
-
-        download_model(args.model, args.model_dir, log_download)
-        LOG.info("Загружаю faster-whisper модель '%s' на устройстве %s (compute_type=%s)...",
-                 args.model, device, compute_type)
+        download_model(args.model, args.model_dir, _percent_logger("log.download_progress"))
+        LOG.info(t("log.loading_model", name=args.model, device=device, compute=compute_type))
         model = create_model(args.model, device, compute_type, args.model_dir)
-        LOG.info("Модель загружена.")
+        LOG.info(t("log.model_loaded"))
+        if args.translate_to:
+            LOG.info(t("log.mt_license"))
+            provider = TranslatorProvider(device, args.model_dir, _percent_logger("log.download_progress_mt"))
     except Exception as exc:
-        LOG.error("Не удалось загрузить модель: %s", exc, exc_info=args.log_level == "DEBUG")
+        LOG.error(t("err.model_load", error=exc), exc_info=args.log_level == "DEBUG")
         return 1
 
     success_count = 0
@@ -840,29 +891,29 @@ def main() -> int:
     failed: list[tuple[Path, str]] = []
 
     for number, source in enumerate(files, start=1):
-        outputs = output_paths_for(source, args.output_dir, input_root, args.formats)
+        outputs = output_paths_for(source, args.output_dir, input_root, args.formats,
+                                   args.variants, args.translate_to)
         LOG.info("[%d/%d] %s", number, len(files), source)
 
         if not args.overwrite and all(path.exists() for path in outputs.values()):
-            LOG.info("Пропускаю, результаты уже существуют (добавьте --overwrite для перезаписи): %s",
-                     ", ".join(str(p) for p in outputs.values()))
+            LOG.info(t("log.skip_existing", paths=", ".join(str(p) for p in outputs.values())))
             skipped_count += 1
             continue
 
         try:
-            model, device = transcribe_one(source, outputs, model, args.model, device, args)
+            model, device = transcribe_one(source, outputs, model, args.model, device, args,
+                                           translator_provider=provider)
             success_count += 1
         except KeyboardInterrupt:
-            LOG.warning("Прервано пользователем.")
+            LOG.warning(t("log.interrupted"))
             return 130
         except Exception as exc:
-            LOG.error("Не удалось обработать '%s': %s", source, exc, exc_info=args.log_level == "DEBUG")
+            LOG.error(t("err.file_failed", path=source, error=exc), exc_info=args.log_level == "DEBUG")
             failed.append((source, str(exc)))
 
-    LOG.info("Готово. Успешно: %d | пропущено: %d | ошибок: %d",
-             success_count, skipped_count, len(failed))
+    LOG.info(t("log.summary", ok=success_count, skipped=skipped_count, failed=len(failed)))
     if failed:
-        LOG.error("Файлы с ошибками:")
+        LOG.error(t("log.failed_header"))
         for path, error in failed:
             LOG.error("  %s: %s", path, error)
         return 1
