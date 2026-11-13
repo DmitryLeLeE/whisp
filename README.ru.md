@@ -40,9 +40,10 @@
 
 ## Скачать готовую программу
 
-1. Откройте раздел [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) и скачайте `WhisperSRT-Windows.zip`.
-2. Распакуйте архив в любую папку.
-3. Запустите `WhisperSRT\WhisperSRT.exe`. Python и FFmpeg устанавливать не нужно.
+Откройте раздел [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) и выберите один из двух файлов. Программа одна и та же, ставить Python и FFmpeg не нужно ни в том, ни в другом случае.
+
+- **`WhisperSRT.exe`** — один файл, внутри которого всё есть: скачали и запустили, распаковывать нечего. Из-за этого при каждом запуске он сначала распаковывается во временную папку, поэтому стартует медленнее.
+- **`WhisperSRT-Windows.zip`** — папка. Распакуйте её в любое место и запустите `WhisperSRT\WhisperSRT.exe`. Стартует быстрее.
 
 При первом запуске выбранная модель скачивается с Hugging Face и сохраняется в кэш. Дальше программа работает без интернета.
 
@@ -143,20 +144,21 @@ python whisper_universal.py "video.mp4" --model turbo --language ru
 ```cmd
 pip install -r requirements-build.txt
 build.bat
+build.bat onefile
 ```
 
-Результат появится в папке `dist\WhisperSRT\`. Для переноса на другой компьютер скопируйте её целиком.
+`build.bat` создаёт папку `dist\WhisperSRT\`; для переноса на другой компьютер скопируйте её целиком. `build.bat onefile` создаёт один файл `dist\WhisperSRT.exe` со всеми библиотеками внутри. Иконка программы и версия в свойствах файла добавляются к exe в обоих случаях.
 
 ## Выпуск релиза
 
 Релиз собирается автоматически в GitHub Actions по тегу:
 
 ```bash
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
-Workflow [`release.yml`](.github/workflows/release.yml) скачает FFmpeg, соберёт приложение, проверит его запуском `WhisperSRT.exe --selftest`, упакует `WhisperSRT-Windows.zip` и прикрепит его к релизу. Если релиз с таким тегом уже создан вручную на GitHub, архив добавляется к нему. Запустить сборку без тега можно вручную на вкладке Actions: архив появится в артефактах запуска.
+Workflow [`release.yml`](.github/workflows/release.yml) скачает FFmpeg, соберёт приложение дважды (папкой и одним файлом), выведет размер сборки, проверит обе сборки запуском `--selftest`, упакует `WhisperSRT-Windows.zip` и прикрепит его и `WhisperSRT.exe` к релизу. Если релиз с таким тегом уже создан вручную на GitHub, файлы добавляются к нему. Запустить сборку без тега можно вручную на вкладке Actions: файлы появятся в артефактах запуска.
 
 ## Частые вопросы
 

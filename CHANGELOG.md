@@ -1,5 +1,17 @@
 # Changelog / История изменений
 
+## 1.2.1
+
+**English**
+- New download: `WhisperSRT.exe`, a single file with all libraries inside (nothing to unpack). It starts more slowly than the folder version because it unpacks itself into a temporary folder on every start. The `WhisperSRT-Windows.zip` folder is still available.
+- The exe now shows its version, name and author in the file properties (Details tab). The program icon is embedded in the exe, and the build checks that it is there.
+- `build.bat onefile` builds the single file yourself.
+
+**Русский**
+- Новая загрузка: `WhisperSRT.exe` — один файл со всеми библиотеками внутри (распаковывать не нужно). Он стартует медленнее папочной версии, потому что при каждом запуске распаковывается во временную папку. Папка `WhisperSRT-Windows.zip` по-прежнему доступна.
+- В свойствах exe (вкладка «Подробно») теперь видны версия, название и автор. Иконка программы встроена в exe, а сборка проверяет, что она на месте.
+- `build.bat onefile` собирает один файл самостоятельно.
+
 ## 1.2.0
 
 **English**

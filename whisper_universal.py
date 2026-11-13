@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from translator import SubtitleTranslator
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 LOG = logging.getLogger("whisper_universal")
 

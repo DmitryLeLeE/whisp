@@ -40,9 +40,10 @@
 
 ## Download the ready-made program
 
-1. Open [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) and download `WhisperSRT-Windows.zip`.
-2. Unpack the archive into any folder.
-3. Run `WhisperSRT\WhisperSRT.exe`. You do not need to install Python or FFmpeg.
+Open [Releases](https://github.com/DmitryLeLeE/whisp/releases/latest) and choose one of two files. It is the same program, and you do not need to install Python or FFmpeg in either case.
+
+- **`WhisperSRT.exe`** is a single file with everything inside: download it and run it, there is nothing to unpack. Because of that it unpacks itself into a temporary folder on every start, so it starts more slowly.
+- **`WhisperSRT-Windows.zip`** is a folder. Unpack it into any folder and run `WhisperSRT\WhisperSRT.exe`. It starts faster.
 
 On the first run the selected model is downloaded from Hugging Face and cached. After that the program works offline.
 
@@ -143,20 +144,21 @@ python whisper_universal.py "video.mp4" --model turbo --language en
 ```cmd
 pip install -r requirements-build.txt
 build.bat
+build.bat onefile
 ```
 
-The result appears in `dist\WhisperSRT\`. Copy the whole folder to move it to another computer.
+`build.bat` creates the folder `dist\WhisperSRT\`; copy the whole folder to move it to another computer. `build.bat onefile` creates one file, `dist\WhisperSRT.exe`, with all libraries inside. The program icon and the version shown in the file properties are added to the exe in both cases.
 
 ## Releasing
 
 A release is built automatically by GitHub Actions from a tag:
 
 ```bash
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
-The [`release.yml`](.github/workflows/release.yml) workflow checks the translation tables, downloads FFmpeg, builds the app, prints the build size, checks it by running `WhisperSRT.exe --selftest`, packs `WhisperSRT-Windows.zip` and attaches it to the release. If a release with that tag was already created by hand on GitHub, the archive is added to it. You can also start a build without a tag on the Actions tab: the archive appears in the run's artifacts.
+The [`release.yml`](.github/workflows/release.yml) workflow checks the translation tables, downloads FFmpeg, builds the app twice (a folder and a single file), prints the build size, checks both by running `--selftest`, packs `WhisperSRT-Windows.zip` and attaches it and `WhisperSRT.exe` to the release. If a release with that tag was already created by hand on GitHub, the files are added to it. You can also start a build without a tag on the Actions tab: the files appear in the run's artifacts.
 
 ## FAQ
 

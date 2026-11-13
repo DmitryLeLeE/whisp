@@ -30,7 +30,7 @@ jobs:
           pip install -r requirements-build.txt
 
       - name: Check that the sources are valid Python
-        run: python -m py_compile WhisperSRT_GUI.py whisper_universal.py translator.py hub.py i18n.py
+        run: python -m py_compile WhisperSRT_GUI.py whisper_universal.py translator.py hub.py i18n.py tools/make_version_info.py tools/check_exe_icon.py
 
       - name: Check the translation tables (RU/EN)
         run: python tests/check_i18n.py
@@ -64,6 +64,10 @@ jobs:
             if (-not (Test-Path $path)) { throw "Missing in build output: $path" }
           }
 
+      - name: Check that the exe carries the program icon
+        continue-on-error: true
+        run: python tools/check_exe_icon.py dist\WhisperSRT\WhisperSRT.exe
+
       - name: Report the size of the build
         shell: pwsh
         run: |
@@ -76,12 +80,13 @@ jobs:
           Get-ChildItem "$root\_internal" -File | Sort-Object Length -Descending | Select-Object -First 8 `
             @{ n = "File"; e = { $_.Name } }, @{ n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 
-      - name: Self-test the built application
+      - name: Self-test the built application (folder)
         shell: pwsh
         timeout-minutes: 5
         run: |
-          $process = Start-Process -FilePath "dist\WhisperSRT\WhisperSRT.exe" -ArgumentList "--selftest" -Wait -PassThru
           $log = Join-Path $env:TEMP "whispersrt_selftest.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath "dist\WhisperSRT\WhisperSRT.exe" -ArgumentList "--selftest" -Wait -PassThru
           if (Test-Path $log) { Get-Content $log }
           if ($process.ExitCode -ne 0) { throw "Self-test failed with exit code $($process.ExitCode)" }
 
@@ -89,11 +94,41 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist\WhisperSRT -DestinationPath WhisperSRT-Windows.zip
 
-      - name: Upload the archive as a workflow artifact
+      - name: Build the single-file exe with PyInstaller
+        shell: cmd
+        run: call build.bat onefile
+
+      - name: Check the single-file exe
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist\WhisperSRT.exe"
+          $mb = [math]::Round($exe.Length / 1MB, 1)
+          "WhisperSRT.exe: $mb MB"
+          # GitHub does not accept release files of 2 GiB or more
+          if ($exe.Length -ge 2000MB) { throw "The single-file exe is too big for a GitHub release ($mb MB)" }
+          python tools/check_exe_icon.py dist\WhisperSRT.exe
+          if ($LASTEXITCODE -ne 0) { Write-Warning "Icon check failed" }
+          $global:LASTEXITCODE = 0
+
+      - name: Self-test the single-file exe
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $log = Join-Path $env:TEMP "whispersrt_selftest.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $process = Start-Process -FilePath "dist\WhisperSRT.exe" -ArgumentList "--selftest" -Wait -PassThru
+          "Start and self-test took {0:N1} s" -f $watch.Elapsed.TotalSeconds
+          if (Test-Path $log) { Get-Content $log }
+          if ($process.ExitCode -ne 0) { throw "Self-test of the single-file exe failed with exit code $($process.ExitCode)" }
+
+      - name: Upload the builds as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: WhisperSRT-Windows
-          path: WhisperSRT-Windows.zip
+          path: |
+            WhisperSRT-Windows.zip
+            dist/WhisperSRT.exe
           compression-level: 0
 
       - name: Publish the GitHub release
@@ -106,9 +141,9 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             # The release was already created by hand (for example in the web UI): just attach the archive
-            gh release upload $tag WhisperSRT-Windows.zip --clobber
+            gh release upload $tag WhisperSRT-Windows.zip dist\WhisperSRT.exe --clobber
           } else {
-            gh release create $tag WhisperSRT-Windows.zip `
+            gh release create $tag WhisperSRT-Windows.zip dist\WhisperSRT.exe `
               --title "WhisperSRT $tag" `
               --notes-file .github/release-notes.md `
               --generate-notes

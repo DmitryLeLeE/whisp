@@ -7,6 +7,7 @@ env/
 build/
 dist/
 *.spec
+version_info.txt
 
 # Бинарники FFmpeg (скачиваются отдельно)
 ffmpeg_bin/
