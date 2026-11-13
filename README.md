@@ -11,7 +11,7 @@
   <img src="docs/screenshot-en-dark.png" alt="WhisperSRT window: file queue, model and language settings, machine translation, progress and log" width="860">
 </p>
 
-**WhisperSRT is a free offline subtitle generator for Windows.** It turns audio and video into subtitles (SRT, VTT, ASS, TXT, JSON) with Whisper speech recognition and can machine-translate them into 18 languages. A Windows program that creates subtitles from audio and video files and can translate them into another language. Recognition and translation run locally ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) and NLLB-200 on CTranslate2), nothing is uploaded anywhere. It has a window with settings (English and Russian) and a command-line tool.
+**WhisperSRT is a free offline subtitle generator for Windows.** It turns audio and video into subtitles (SRT, VTT, ASS, TXT, JSON) with Whisper speech recognition and can machine-translate them into 18 languages. Recognition and translation run locally ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) and NLLB-200 on CTranslate2), nothing is uploaded anywhere. It has a window with settings (English and Russian) and a command-line tool.
 
 ## Features
 
