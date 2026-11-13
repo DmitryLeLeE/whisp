@@ -7,7 +7,11 @@
 
 [Русский](README.ru.md) · **English**
 
-A Windows program that creates subtitles from audio and video files and can translate them into another language. Recognition and translation run locally ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) and NLLB-200 on CTranslate2), nothing is uploaded anywhere. It has a window with settings (English and Russian) and a command-line tool.
+<p align="center">
+  <img src="docs/screenshot-en-dark.png" alt="WhisperSRT window: file queue, model and language settings, machine translation, progress and log" width="860">
+</p>
+
+**WhisperSRT is a free offline subtitle generator for Windows.** It turns audio and video into subtitles (SRT, VTT, ASS, TXT, JSON) with Whisper speech recognition and can machine-translate them into 18 languages. A Windows program that creates subtitles from audio and video files and can translate them into another language. Recognition and translation run locally ([faster-whisper](https://github.com/SYSTRAN/faster-whisper) and NLLB-200 on CTranslate2), nothing is uploaded anywhere. It has a window with settings (English and Russian) and a command-line tool.
 
 ## Features
 
@@ -26,6 +30,13 @@ A Windows program that creates subtitles from audio and video files and can tran
 - Downloads models with a progress bar; the models folder is configurable.
 - Dark and light themes, settings are remembered.
 - Picks the compute type for CPU or CUDA automatically.
+
+## Who it is for
+
+- Video editors, YouTubers and streamers who need `.srt` subtitles without uploading footage to a cloud service.
+- Journalists and researchers transcribing interviews, lectures and podcasts, including long files in batches.
+- Translators and course authors who need bilingual subtitles for language learning.
+- Anyone who wants an offline alternative to online auto-captioning, without a subscription or a minutes limit.
 
 ## Download the ready-made program
 
@@ -146,6 +157,20 @@ git push origin v1.2.0
 ```
 
 The [`release.yml`](.github/workflows/release.yml) workflow checks the translation tables, downloads FFmpeg, builds the app, prints the build size, checks it by running `WhisperSRT.exe --selftest`, packs `WhisperSRT-Windows.zip` and attaches it to the release. If a release with that tag was already created by hand on GitHub, the archive is added to it. You can also start a build without a tag on the Actions tab: the archive appears in the run's artifacts.
+
+## FAQ
+
+**Does it need internet?** Only to download the models the first time. After that recognition and translation work offline.
+
+**Which languages can it recognize?** About 100, everything Whisper supports. Machine translation covers 18 languages (see above).
+
+**Is it really free?** Yes, the code is MIT. Only the NLLB-200 translation weights are non-commercial (CC-BY-NC-4.0).
+
+**Does it work on a PC without a graphics card?** Yes. It uses the CPU when there is no NVIDIA GPU (use `small` or `turbo` for speed).
+
+**Where do I report a bug or ask for a feature?** Open an [issue](https://github.com/DmitryLeLeE/whisp/issues).
+
+Keywords: Whisper GUI for Windows, faster-whisper, subtitle generator, speech to text, SRT, VTT, ASS, offline transcription, video transcription, machine translation of subtitles, NLLB-200, bilingual subtitles.
 
 ## License
 
