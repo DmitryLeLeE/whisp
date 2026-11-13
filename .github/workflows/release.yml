@@ -60,6 +60,15 @@ jobs:
             if (-not (Test-Path $path)) { throw "Missing in build output: $path" }
           }
 
+      - name: Self-test the built application
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $process = Start-Process -FilePath "dist\WhisperSRT\WhisperSRT.exe" -ArgumentList "--selftest" -Wait -PassThru
+          $log = Join-Path $env:TEMP "whispersrt_selftest.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($process.ExitCode -ne 0) { throw "Self-test failed with exit code $($process.ExitCode)" }
+
       - name: Pack the archive
         shell: pwsh
         run: Compress-Archive -Path dist\WhisperSRT -DestinationPath WhisperSRT-Windows.zip

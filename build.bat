@@ -25,6 +25,8 @@ python -m PyInstaller --noconfirm --clean ^
     --collect-all "ctranslate2" ^
     --collect-all "onnxruntime" ^
     --collect-all "av" ^
+    --collect-all "sv_ttk" ^
+    --collect-all "tkinterdnd2" ^
     --hidden-import "whisper_universal" ^
     WhisperSRT_GUI.py
 if errorlevel 1 goto failed

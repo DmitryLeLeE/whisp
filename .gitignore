@@ -24,7 +24,7 @@ __pycache__/
 # Временные WAV и SRT
 whisper_transcribe_*/
 *.tmp
-*.whisper.srt
+*.whisper.*
 
 # Редакторы
 .vscode/
