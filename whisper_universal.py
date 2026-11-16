@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from translator import SubtitleTranslator
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 LOG = logging.getLogger("whisper_universal")
 
@@ -587,6 +587,31 @@ def download_model(
     return hub.download_repo(repo, MODEL_ALLOW_PATTERNS, MODEL_REQUIRED, cache_dir, progress, label=name)
 
 
+def ensure_av_compat() -> None:
+    """PyAV 19 removed the `metadata_errors` argument that faster-whisper 1.2.x still passes to av.open().
+
+    Without this every file fails with "open() got an unexpected keyword argument 'metadata_errors'".
+    The wrapper drops the argument only when this PyAV does not know it.
+    """
+    import av
+
+    original = av.open
+    if getattr(original, "_whispersrt_compat", False):
+        return
+
+    def open_compat(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except TypeError as error:
+            if "metadata_errors" not in kwargs or "metadata_errors" not in str(error):
+                raise
+            kwargs.pop("metadata_errors")
+            return original(*args, **kwargs)
+
+    open_compat._whispersrt_compat = True
+    av.open = open_compat
+
+
 def create_model(
     model_name: str,
     device: str,
@@ -595,6 +620,7 @@ def create_model(
 ) -> WhisperModel:
     from faster_whisper import WhisperModel  # heavy import: only when the model is really needed
 
+    ensure_av_compat()
     cpu_threads = min(8, os.cpu_count() or 4)
     cached = find_cached_model(model_name, cache_dir)
     return WhisperModel(

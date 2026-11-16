@@ -26,9 +26,11 @@ NVIDIA GPU: CUDA 12 (cuBLAS) and cuDNN 9 are needed and are not included. If the
 
 
 **English**
-- New download `WhisperSRT.exe`: a single file with all libraries inside.
-- The exe shows its version, name and author in the file properties; the icon is embedded and checked by the build.
+- Fixed: recognition failed on every file with the error "open() got an unexpected keyword argument 'metadata_errors'" (incompatibility of faster-whisper with the new PyAV 19). If you downloaded 1.2.0 or 1.2.1, please update.
+- The self-test now decodes a real audio file, so this kind of breakage is caught before a release.
+- The single-file `WhisperSRT.exe` is available next to the folder version.
 
 **Русский**
-- Новая загрузка `WhisperSRT.exe`: один файл со всеми библиотеками внутри.
-- В свойствах exe видны версия, название и автор; иконка встроена и проверяется при сборке.
+- Исправлено: распознавание падало на любом файле с ошибкой «open() got an unexpected keyword argument 'metadata_errors'» (несовместимость faster-whisper с новым PyAV 19). Если вы скачали 1.2.0 или 1.2.1, обновитесь.
+- Самопроверка теперь декодирует настоящий звуковой файл, поэтому такие поломки ловятся до релиза.
+- Одиночный `WhisperSRT.exe` доступен рядом с папочной версией.

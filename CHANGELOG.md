@@ -1,5 +1,15 @@
 # Changelog / История изменений
 
+## 1.2.2
+
+**English**
+- Fixed: recognition failed on every file with the error "open() got an unexpected keyword argument 'metadata_errors'". The build picked up PyAV 19, which no longer accepts an argument that faster-whisper still passes. The program now works with both old and new PyAV, and the version is limited to `av<19` in `requirements.txt`.
+- The self-test now decodes a real audio file through PyAV, so this kind of breakage is caught before a release.
+
+**Русский**
+- Исправлено: распознавание падало на любом файле с ошибкой «open() got an unexpected keyword argument 'metadata_errors'». В сборку попал PyAV 19, который больше не принимает аргумент, всё ещё передаваемый faster-whisper. Теперь программа работает и со старым, и с новым PyAV, а в `requirements.txt` версия ограничена `av<19`.
+- Самопроверка теперь декодирует настоящий звуковой файл через PyAV, поэтому такие поломки ловятся до релиза.
+
 ## 1.2.1
 
 **English**

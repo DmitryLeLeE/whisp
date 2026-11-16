@@ -1459,6 +1459,26 @@ def run_selftest() -> int:
             raise RuntimeError("VAD file is missing (assets/*.onnx)")
         return assets[0].name
 
+    def check_decode_audio():
+        # The real path of every recognition: faster-whisper reads audio through PyAV
+        import wave
+        from faster_whisper.audio import decode_audio
+
+        core.ensure_av_compat()
+        wav_path = Path(tempfile.gettempdir()) / "whispersrt_selftest.wav"
+        with wave.open(str(wav_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"\x00\x00" * 16000)
+        try:
+            samples = decode_audio(str(wav_path), sampling_rate=16000)
+        finally:
+            wav_path.unlink(missing_ok=True)
+        if len(samples) != 16000:
+            raise RuntimeError(f"decoded {len(samples)} samples instead of 16000")
+        return f"{len(samples)} samples"
+
     def check_icon():
         missing = [name for name in ("assets/icon.ico", "assets/icon.png") if not resource_path(name).is_file()]
         if missing:
@@ -1500,6 +1520,7 @@ def run_selftest() -> int:
         check(f"import {module}", check_import(module))
     check("FFmpeg", check_ffmpeg)
     check("VAD file", check_vad_asset)
+    check("decode audio (PyAV)", check_decode_audio)
     check("translator stack", check_translator_stack)
     check("icon", check_icon)
     check("translations", check_translations)

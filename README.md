@@ -154,8 +154,8 @@ build.bat onefile
 A release is built automatically by GitHub Actions from a tag:
 
 ```bash
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.2.2
+git push origin v1.2.2
 ```
 
 The [`release.yml`](.github/workflows/release.yml) workflow checks the translation tables, downloads FFmpeg, builds the app twice (a folder and a single file), prints the build size, checks both by running `--selftest`, packs `WhisperSRT-Windows.zip` and attaches it and `WhisperSRT.exe` to the release. If a release with that tag was already created by hand on GitHub, the files are added to it. You can also start a build without a tag on the Actions tab: the files appear in the run's artifacts.

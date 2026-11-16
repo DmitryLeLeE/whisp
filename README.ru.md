@@ -154,8 +154,8 @@ build.bat onefile
 Релиз собирается автоматически в GitHub Actions по тегу:
 
 ```bash
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.2.2
+git push origin v1.2.2
 ```
 
 Workflow [`release.yml`](.github/workflows/release.yml) скачает FFmpeg, соберёт приложение дважды (папкой и одним файлом), выведет размер сборки, проверит обе сборки запуском `--selftest`, упакует `WhisperSRT-Windows.zip` и прикрепит его и `WhisperSRT.exe` к релизу. Если релиз с таким тегом уже создан вручную на GitHub, файлы добавляются к нему. Запустить сборку без тега можно вручную на вкладке Actions: файлы появятся в артефактах запуска.
